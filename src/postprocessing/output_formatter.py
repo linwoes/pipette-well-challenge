@@ -63,7 +63,7 @@ def validate_output(wells: List[Dict]) -> bool:
         return False
 
     if len(wells) == 0:
-        return True  # Empty list is valid
+        return False  # Must predict at least one well
 
     valid_rows = set('ABCDEFGH')
     valid_cols = set(range(1, 13))
@@ -81,27 +81,41 @@ def validate_output(wells: List[Dict]) -> bool:
     return True
 
 
-def format_json_output(clip_id_fpv: str, clip_id_topview: str, wells: List[Dict]) -> Dict:
+def format_json_output(
+    clip_id_fpv: str,
+    clip_id_topview: str,
+    wells: List[Dict],
+    inference_time_s: float = 0.0,
+    confident: bool = True,
+) -> Dict:
     """
-    Format well predictions as JSON output matching challenge spec.
+    Format well predictions as JSON output matching challenge spec exactly.
+
+    Challenge spec output format:
+        {
+          "clip_id_FPV": "...",
+          "clip_id_Topview": "...",
+          "wells_prediction": [{"well_row": "A", "well_column": 1}, ...]
+        }
 
     Args:
         clip_id_fpv: FPV clip identifier
         clip_id_topview: Top-view clip identifier
-        wells: List of well dictionaries
+        wells: List of well dictionaries with keys well_row, well_column
+        inference_time_s: Wall-clock inference time in seconds
+        confident: Whether model was confident (max prob >= threshold)
 
     Returns:
-        Dictionary with structure: {clips, wells, metadata}
+        Dictionary matching the challenge submission format
     """
     return {
-        'clips': {
-            'fpv': clip_id_fpv,
-            'topview': clip_id_topview
-        },
-        'wells': wells,
+        'clip_id_FPV': clip_id_fpv,
+        'clip_id_Topview': clip_id_topview,
+        'wells_prediction': wells,
         'metadata': {
-            'inference_framework': 'DINOv2',
-            'confidence_threshold': 0.5
+            'model': 'DINOv2-ViT-B/14+LoRA',
+            'inference_time_s': round(inference_time_s, 3),
+            'confident': confident,
         }
     }
 

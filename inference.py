@@ -7,10 +7,9 @@ Predicts which well(s) of a 96-well plate are targeted during automated
 liquid dispensing, given synchronized dual-view video (FPV + top-view).
 
 Usage:
-  python inference.py --fpv path/to/fpv.mp4 --topview path/to/topview.mp4 --output result.json [--config default.yaml] [--verbose]
-
-Output:
-  JSON file containing predicted well coordinates (e.g., {"wells": [{"well_row": "A", "well_column": 1}, ...]})
+  python inference.py --fpv path/to/fpv.mp4 --topview path/to/topview.mp4 --output result.json
+  python inference.py --fpv fpv.mp4 --topview top.mp4  # writes to stdout if no --output
+  python inference.py --fpv fpv.mp4 --topview top.mp4 --model checkpoints/best.pt --threshold 0.4
 
 Author: ML Team
 Date: April 2026
@@ -19,16 +18,22 @@ Date: April 2026
 import argparse
 import json
 import logging
+import os
 import sys
 import time
+import yaml
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
-# TODO: Import model and preprocessing modules when implemented
-# from src.models.backbone import ResNet18Backbone
-# from src.models.fusion import DualViewFusion
-# from src.preprocessing.video_loader import load_and_sync_videos
-# from src.postprocessing.output_formatter import format_well_predictions
+import cv2
+import numpy as np
+import torch
+import torch.nn as nn
+
+from src.models.backbone import DINOv2Backbone
+from src.models.fusion import DualViewFusion
+from src.preprocessing.video_loader import load_video, align_clips, preprocess_frame
+from src.postprocessing.output_formatter import logits_to_wells, validate_output, format_json_output
 
 # Configure logging
 logging.basicConfig(
@@ -38,81 +43,156 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+class PipetteWellModel(nn.Module):
+    """Unified model combining backbone and fusion."""
+
+    def __init__(self, backbone, fusion):
+        super().__init__()
+        self.backbone = backbone
+        self.fusion = fusion
+
+    def forward(self, fpv_frames: torch.Tensor, topview_frames: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Args:
+            fpv_frames: (B, N, 3, 224, 224) or (B, 3, 224, 224)
+            topview_frames: (B, N, 3, 224, 224) or (B, 3, 224, 224)
+
+        Returns:
+            row_logits: (B, 8)
+            col_logits: (B, 12)
+        """
+        # Handle both 4D and 5D inputs
+        if fpv_frames.dim() == 5:
+            B, N, C, H, W = fpv_frames.shape
+            fpv_frames = fpv_frames.view(B * N, C, H, W)
+            topview_frames = topview_frames.view(B * N, C, H, W)
+            extract_cls = True
+        else:
+            B = fpv_frames.shape[0]
+            extract_cls = False
+
+        # Extract features from both views
+        fpv_features = self.backbone(fpv_frames)  # (B*N, 768) or (B, 768)
+        topview_features = self.backbone(topview_frames)
+
+        # Pool over frames if needed
+        if extract_cls:
+            fpv_features = fpv_features.view(B, N, -1).mean(dim=1)  # (B, 768)
+            topview_features = topview_features.view(B, N, -1).mean(dim=1)
+
+        # Fuse and predict
+        row_logits, col_logits = self.fusion(fpv_features, topview_features)
+        return row_logits, col_logits
+
+
 class PipetteWellDetector:
-    """
-    Main inference class for well detection.
+    """Main inference class for well detection."""
 
-    This is a skeleton implementation with placeholder logic.
-    TODO: Implement actual model loading, inference, and postprocessing.
-    """
-
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None, model_checkpoint: Optional[str] = None,
+                 threshold: float = 0.5, device: Optional[str] = None):
         """
         Initialize the detector.
 
         Args:
-            config_path: Path to YAML configuration file. If None, uses default.
-
-        TODO:
-            1. Load YAML config (model path, threshold, frame sampling rate, etc.)
-            2. Initialize ResNet-18 backbone with ImageNet weights
-            3. Load trained model checkpoint
-            4. Move model to GPU if available
+            config_path: Path to YAML configuration file
+            model_checkpoint: Path to model checkpoint (overrides config)
+            threshold: Confidence threshold for predictions
+            device: Device to run on ('cuda' or 'cpu')
         """
         self.config_path = config_path or "configs/default.yaml"
-        self.model = None
-        self.device = "cuda"  # TODO: Detect GPU availability
+        self.threshold = threshold
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-        logger.info(f"Initializing PipetteWellDetector with config: {self.config_path}")
+        logger.info(f"Initializing PipetteWellDetector")
+        logger.info(f"Device: {self.device}")
+        logger.info(f"Threshold: {threshold}")
 
-        # TODO: Load config and initialize model
-        # self.config = load_yaml_config(self.config_path)
-        # self.model = self._load_model(self.config)
-        # self.model.eval()
+        # Load configuration
+        self.config = self._load_config(self.config_path)
 
-    def _load_model(self, config: Dict):
-        """
-        Load trained model from checkpoint.
+        # Initialize model
+        self.model = self._load_model(model_checkpoint)
+        self.model.eval()
 
-        Args:
-            config: Configuration dictionary from YAML
+    def _load_config(self, config_path: str) -> Dict:
+        """Load YAML configuration."""
+        if not os.path.exists(config_path):
+            logger.warning(f"Config not found: {config_path}. Using defaults.")
+            return self._default_config()
 
-        Returns:
-            Loaded PyTorch model on GPU
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
 
-        TODO:
-            1. Create ResNet-18 backbone + dual-view fusion module
-            2. Load weights from checkpoint (path in config)
-            3. Set to eval mode
-            4. Validate checkpoint integrity
-        """
-        raise NotImplementedError("Model loading not yet implemented. "
-                                "TODO: Load ResNet-18 backbone and factorized heads.")
+        logger.info(f"Loaded config from {config_path}")
+        return config
 
-    def load_and_align_videos(self, fpv_path: str, topview_path: str) -> Dict:
-        """
-        Load FPV and top-view videos, extract frames, and align temporally.
-
-        Args:
-            fpv_path: Path to FPV video file
-            topview_path: Path to top-view video file
-
-        Returns:
-            Dictionary with aligned frames:
-            {
-                'fpv_frames': (T, H, W, 3) numpy array,
-                'topview_frames': (T, H, W, 3) numpy array,
-                'frame_indices': Aligned frame indices,
-                'metadata': {'fps': ..., 'duration': ..., 'frame_offset': ...}
+    def _default_config(self) -> Dict:
+        """Return default configuration."""
+        return {
+            'model': {
+                'backbone': 'dinov2',
+                'input_size': [224, 224],
+                'num_rows': 8,
+                'num_columns': 12,
+                'fusion_type': 'concatenation',
+            },
+            'checkpoint': {
+                'path': 'checkpoints/best.pt',
+                'device': self.device,
+            },
+            'inference': {
+                'batch_size': 1,
+                'confidence_threshold': self.threshold,
+                'max_inference_time_seconds': 120,
+            },
+            'video': {
+                'target_fps': 30,
+                'frame_resize': [224, 224],
             }
+        }
 
-        TODO:
-            1. Use cv2.VideoCapture to open both videos
-            2. Extract frames at fixed intervals (e.g., every 5 frames)
-            3. Compute optical flow in both streams to find temporal offset
-            4. Synchronize frames using cross-correlation peak
-            5. Resize to (224, 224) for model input
-            6. Return aligned frame pairs
+    def _load_model(self, model_checkpoint: Optional[str] = None) -> PipetteWellModel:
+        """Load trained model from checkpoint."""
+        checkpoint_path = model_checkpoint or self.config.get('checkpoint', {}).get('path', 'checkpoints/best.pt')
+
+        # Initialize backbone and fusion
+        backbone = DINOv2Backbone(use_lora=True, freeze_base=False)
+        fusion = DualViewFusion(
+            feature_dim=768,
+            num_rows=8,
+            num_columns=12,
+            fusion_type=self.config.get('model', {}).get('fusion_type', 'concatenation'),
+        )
+
+        model = PipetteWellModel(backbone, fusion)
+        model = model.to(self.device)
+
+        # Try to load checkpoint
+        if os.path.exists(checkpoint_path):
+            try:
+                state = torch.load(checkpoint_path, map_location=self.device)
+                model.load_state_dict(state['model_state_dict'])
+                logger.info(f"Loaded checkpoint from {checkpoint_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load checkpoint from {checkpoint_path}: {e}")
+                logger.warning("Running with uninitialized weights (inference will be random)")
+        else:
+            logger.warning(f"No checkpoint found at {checkpoint_path}")
+            logger.warning("Running with uninitialized weights (inference will be random)")
+
+        return model
+
+    def load_and_preprocess_videos(self, fpv_path: str, topview_path: str, num_frames: int = 8) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Load and preprocess dual-view videos.
+
+        Args:
+            fpv_path: Path to FPV video
+            topview_path: Path to top-view video
+            num_frames: Number of frames to sample
+
+        Returns:
+            (fpv_tensor, topview_tensor): Both shape (1, N, 3, 224, 224)
         """
         logger.info(f"Loading videos: FPV={fpv_path}, TopView={topview_path}")
 
@@ -122,279 +202,148 @@ class PipetteWellDetector:
         if not Path(topview_path).exists():
             raise FileNotFoundError(f"Top-view video not found: {topview_path}")
 
-        # TODO: Implement frame extraction and alignment
-        raise NotImplementedError("Video loading and temporal alignment not yet implemented. "
-                                "TODO: Use OpenCV to extract frames and cv2.opticalFlow for synchronization.")
+        # Load frames from both videos
+        fpv_frames = load_video(fpv_path, max_frames=num_frames)  # (N, H, W, 3)
+        topview_frames = load_video(topview_path, max_frames=num_frames)
 
-    def preprocess_frames(self, fpv_frames, topview_frames):
-        """
-        Preprocess frames: normalize, augment, and prepare for model input.
+        # Align to same length
+        fpv_frames, topview_frames = align_clips(fpv_frames, topview_frames)
+        logger.info(f"Loaded {len(fpv_frames)} frames from each video")
 
-        Args:
-            fpv_frames: (T, H, W, 3) numpy array
-            topview_frames: (T, H, W, 3) numpy array
+        # Preprocess each frame
+        fpv_processed = np.array([preprocess_frame(f) for f in fpv_frames])  # (N, 224, 224, 3)
+        topview_processed = np.array([preprocess_frame(f) for f in topview_frames])
 
-        Returns:
-            Preprocessed tensors ready for model input:
-            {
-                'fpv_tensor': (T, 3, 224, 224) torch tensor on GPU,
-                'topview_tensor': (T, 3, 224, 224) torch tensor on GPU,
-            }
+        # Normalize with ImageNet stats
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-        TODO:
-            1. Normalize to [0, 1] or [-1, 1] depending on model
-            2. Apply albumentations augmentations if training
-            3. Convert numpy arrays to PyTorch tensors
-            4. Move to GPU device
-            5. Stack or concatenate frames if using temporal model
-        """
-        raise NotImplementedError("Preprocessing not yet implemented. "
-                                "TODO: Normalize, augment, and convert to PyTorch tensors.")
+        fpv_processed = (fpv_processed - mean[None, None, :]) / std[None, None, :]
+        topview_processed = (topview_processed - mean[None, None, :]) / std[None, None, :]
 
-    def infer(self, fpv_tensor, topview_tensor) -> Dict:
-        """
-        Run model inference on aligned frame pair.
+        # Convert to tensors: (N, 224, 224, 3) -> (N, 3, 224, 224) -> (1, N, 3, 224, 224)
+        fpv_tensor = torch.from_numpy(fpv_processed.transpose(0, 3, 1, 2)).float()
+        topview_tensor = torch.from_numpy(topview_processed.transpose(0, 3, 1, 2)).float()
 
-        Args:
-            fpv_tensor: (T, 3, 224, 224) torch tensor on GPU
-            topview_tensor: (T, 3, 224, 224) torch tensor on GPU
+        # Add batch dimension
+        fpv_tensor = fpv_tensor.unsqueeze(0).to(self.device)  # (1, N, 3, 224, 224)
+        topview_tensor = topview_tensor.unsqueeze(0).to(self.device)
 
-        Returns:
-            Raw model output:
-            {
-                'row_logits': (8,) numpy array (one score per row A-H),
-                'col_logits': (12,) numpy array (one score per column 1-12),
-                'inference_time_ms': float,
-                'confidence_map': (8, 12) numpy array for visualization
-            }
+        logger.info(f"Preprocessed tensors: FPV {fpv_tensor.shape}, TopView {topview_tensor.shape}")
 
-        TODO:
-            1. Set model.eval() and torch.no_grad()
-            2. Concatenate FPV and top-view features
-            3. Forward pass through ResNet-18 + fusion + heads
-            4. Extract row_logits and col_logits (with sigmoid applied)
-            5. Measure inference latency
-            6. Return raw outputs before thresholding
-        """
+        return fpv_tensor, topview_tensor
+
+    def infer(self, fpv_tensor: torch.Tensor, topview_tensor: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Run model inference."""
         logger.info("Running inference...")
 
-        # TODO: Implement model forward pass
-        raise NotImplementedError("Model inference not yet implemented. "
-                                "TODO: Forward FPV and topview tensors through ResNet-18 + fusion + output heads.")
+        start_time = time.time()
 
-    def postprocess_predictions(self,
-                               row_logits: List[float],
-                               col_logits: List[float],
-                               confidence_threshold: float = 0.5) -> List[Dict]:
+        with torch.no_grad():
+            row_logits, col_logits = self.model(fpv_tensor, topview_tensor)
+
+        elapsed = time.time() - start_time
+
+        if elapsed > 90:
+            logger.warning(f"Inference took {elapsed:.2f}s (approaching 2-min SLA buffer)")
+
+        logger.info(f"Inference completed in {elapsed:.3f}s")
+        logger.info(f"Row logits shape: {row_logits.shape}, Col logits shape: {col_logits.shape}")
+
+        return row_logits, col_logits, elapsed
+
+    def postprocess_predictions(self, row_logits: torch.Tensor, col_logits: torch.Tensor,
+                               fpv_path: str, topview_path: str, inference_time: float) -> Dict:
         """
-        Convert raw logits to well predictions with post-processing constraints.
+        Convert logits to well predictions with uncertainty handling.
 
         Args:
-            row_logits: [8] array of row probabilities (A-H)
-            col_logits: [12] array of column probabilities (1-12)
-            confidence_threshold: Minimum confidence to output a well (default 0.5)
+            row_logits: (B, 8) tensor
+            col_logits: (B, 12) tensor
+            fpv_path: FPV video path
+            topview_path: Topview video path
+            inference_time: Inference time in seconds
 
         Returns:
-            List of predicted wells:
-            [
-                {"well_row": "A", "well_column": 1, "confidence": 0.95},
-                {"well_row": "A", "well_column": 2, "confidence": 0.88},
-                ...
-            ]
-
-        TODO:
-            1. Apply sigmoid to logits (if not already done)
-            2. Threshold at confidence_threshold
-            3. Cartesian product: all (row_i, col_j) where row[i] > thresh AND col[j] > thresh
-            4. Validate cardinality (if cardinality head says 8, enforce 8 wells)
-            5. Sort in canonical order (A1, A2, ..., H12)
-            6. Deduplicate
-            7. Validate all wells in [A-H] × [1-12]
-            8. Return with confidence scores
+            JSON output dictionary
         """
-        logger.info(f"Post-processing predictions (threshold={confidence_threshold})...")
+        logger.info("Post-processing predictions...")
 
-        # TODO: Implement logits -> well predictions
-        raise NotImplementedError("Post-processing not yet implemented. "
-                                "TODO: Convert row/col logits to well list with cardinality constraints.")
+        # Apply sigmoid
+        row_probs = torch.sigmoid(row_logits).squeeze(0).cpu().numpy()  # (8,)
+        col_probs = torch.sigmoid(col_logits).squeeze(0).cpu().numpy()  # (12,)
 
-    def validate_output_schema(self, wells: List[Dict]) -> bool:
-        """
-        Validate that output matches expected JSON schema.
+        logger.info(f"Row max prob: {row_probs.max():.4f}, Col max prob: {col_probs.max():.4f}")
 
-        Args:
-            wells: List of predicted well dictionaries
+        # Check for uncertain output
+        if row_probs.max() < self.threshold or col_probs.max() < self.threshold:
+            logger.warning(f"Low confidence detected. Max row: {row_probs.max():.4f}, Max col: {col_probs.max():.4f}")
+            output = format_json_output(fpv_path, topview_path, [])
+            output['metadata']['uncertain'] = True
+            output['metadata']['reason'] = 'low_confidence'
+            output['metadata']['max_row_prob'] = float(row_probs.max())
+            output['metadata']['max_col_prob'] = float(col_probs.max())
+        else:
+            # Convert logits to wells using Cartesian product
+            wells = logits_to_wells(row_probs, col_probs, threshold=self.threshold)
+            output = format_json_output(fpv_path, topview_path, wells)
 
-        Returns:
-            True if valid, False otherwise
+        # Add metadata
+        output['metadata']['inference_time_s'] = round(inference_time, 3)
+        output['metadata']['model'] = 'DINOv2-ViT-B/14+LoRA'
+        output['metadata']['confident'] = row_probs.max() >= self.threshold and col_probs.max() >= self.threshold
+        output['metadata']['threshold'] = self.threshold
 
-        Validates:
-            - wells is a list
-            - Each well has 'well_row' (A-H) and 'well_column' (1-12)
-            - No duplicate wells
-            - All wells within bounds
+        logger.info(f"Predicted {len(output.get('wells', []))} wells")
 
-        TODO:
-            1. Check wells is list
-            2. For each well:
-               - Check 'well_row' key exists and value in ['A','B',...,'H']
-               - Check 'well_column' key exists and value in [1,2,...,12]
-            3. Check no duplicates
-            4. Log validation errors
-            5. Return True if all checks pass
-        """
-        if not isinstance(wells, list):
-            logger.error(f"wells must be a list, got {type(wells)}")
-            return False
-
-        # TODO: Implement validation checks
-        logger.info(f"Validating {len(wells)} predicted wells...")
-
-        valid_rows = set('ABCDEFGH')
-        valid_cols = set(range(1, 13))
-
-        seen = set()
-        for i, well in enumerate(wells):
-            if not isinstance(well, dict):
-                logger.error(f"Well {i} is not a dict: {well}")
-                return False
-
-            if 'well_row' not in well or 'well_column' not in well:
-                logger.error(f"Well {i} missing required keys: {well}")
-                return False
-
-            row = well.get('well_row')
-            col = well.get('well_column')
-
-            if row not in valid_rows:
-                logger.error(f"Well {i} has invalid row: {row}")
-                return False
-
-            if col not in valid_cols:
-                logger.error(f"Well {i} has invalid column: {col}")
-                return False
-
-            well_key = (row, col)
-            if well_key in seen:
-                logger.error(f"Duplicate well detected: {row}{col}")
-                return False
-
-            seen.add(well_key)
-
-        logger.info("Output schema validation passed")
-        return True
+        return output
 
     def infer_and_predict(self, fpv_path: str, topview_path: str) -> Dict:
-        """
-        End-to-end inference pipeline.
-
-        Args:
-            fpv_path: Path to FPV video
-            topview_path: Path to top-view video
-
-        Returns:
-            JSON-serializable dictionary:
-            {
-                'wells': [{'well_row': 'A', 'well_column': 1}, ...],
-                'metadata': {
-                    'inference_time_seconds': 1.23,
-                    'confidence_threshold': 0.5,
-                    'fpv_frames_analyzed': 150,
-                    'topview_frames_analyzed': 150
-                }
-            }
-        """
+        """End-to-end inference pipeline."""
         start_time = time.time()
 
         try:
-            # Step 1: Load and align videos
-            video_data = self.load_and_align_videos(fpv_path, topview_path)
-            fpv_frames = video_data['fpv_frames']
-            topview_frames = video_data['topview_frames']
+            # Load and preprocess videos
+            fpv_tensor, topview_tensor = self.load_and_preprocess_videos(fpv_path, topview_path)
 
-            # Step 2: Preprocess
-            processed = self.preprocess_frames(fpv_frames, topview_frames)
-            fpv_tensor = processed['fpv_tensor']
-            topview_tensor = processed['topview_tensor']
+            # Run inference
+            row_logits, col_logits, inference_time = self.infer(fpv_tensor, topview_tensor)
 
-            # Step 3: Infer
-            inference_output = self.infer(fpv_tensor, topview_tensor)
-            row_logits = inference_output['row_logits']
-            col_logits = inference_output['col_logits']
+            # Post-process
+            output = self.postprocess_predictions(row_logits, col_logits, fpv_path, topview_path, inference_time)
 
-            # Step 4: Post-process
-            wells = self.postprocess_predictions(row_logits, col_logits)
+            # Validate schema
+            if 'wells' in output:
+                if not validate_output(output['wells']):
+                    logger.error("Output failed schema validation")
+                    output['wells'] = []
 
-            # Step 5: Validate
-            if not self.validate_output_schema(wells):
-                raise ValueError("Output failed schema validation")
+            total_time = time.time() - start_time
+            logger.info(f"Total pipeline time: {total_time:.3f}s")
 
-            elapsed_time = time.time() - start_time
+            return output
 
-            return {
-                'wells': wells,
-                'metadata': {
-                    'inference_time_seconds': round(elapsed_time, 2),
-                    'confidence_threshold': 0.5,
-                    'fpv_frames_analyzed': len(fpv_frames),
-                    'topview_frames_analyzed': len(topview_frames),
-                    'frame_offset_detected': video_data.get('metadata', {}).get('frame_offset', 'unknown')
-                }
-            }
-
-        except NotImplementedError as e:
-            logger.error(f"Not implemented: {e}")
-            raise
         except Exception as e:
             logger.error(f"Inference failed: {e}", exc_info=True)
             raise
 
 
 def main():
-    """
-    Main entry point for CLI.
-    """
+    """Main entry point for CLI."""
     parser = argparse.ArgumentParser(
         description='Pipette Well Detection - Predict well coordinates from dual-view video'
     )
 
-    parser.add_argument(
-        '--fpv',
-        type=str,
-        required=True,
-        help='Path to FPV (first-person view) video file'
-    )
-
-    parser.add_argument(
-        '--topview',
-        type=str,
-        required=True,
-        help='Path to top-view (bird\'s-eye) video file'
-    )
-
-    parser.add_argument(
-        '--output',
-        type=str,
-        required=True,
-        help='Path to output JSON file (e.g., result.json)'
-    )
-
-    parser.add_argument(
-        '--config',
-        type=str,
-        default='configs/default.yaml',
-        help='Path to configuration YAML file (default: configs/default.yaml)'
-    )
-
-    parser.add_argument(
-        '--verbose',
-        action='store_true',
-        help='Enable verbose logging'
-    )
+    parser.add_argument('--fpv', type=str, required=True, help='Path to FPV video file')
+    parser.add_argument('--topview', type=str, required=True, help='Path to top-view video file')
+    parser.add_argument('--output', type=str, default=None, help='Output JSON file (default: stdout)')
+    parser.add_argument('--config', type=str, default='configs/default.yaml', help='Config YAML file')
+    parser.add_argument('--model', type=str, default=None, help='Model checkpoint path')
+    parser.add_argument('--threshold', type=float, default=0.5, help='Confidence threshold')
+    parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 
     args = parser.parse_args()
 
-    # Set logging level
     if args.verbose:
         logger.setLevel(logging.DEBUG)
 
@@ -403,37 +352,36 @@ def main():
     logger.info("=" * 70)
     logger.info(f"FPV video: {args.fpv}")
     logger.info(f"Top-view video: {args.topview}")
-    logger.info(f"Output: {args.output}")
+    logger.info(f"Output: {args.output or 'stdout'}")
     logger.info(f"Config: {args.config}")
+    if args.model:
+        logger.info(f"Model: {args.model}")
+    logger.info(f"Threshold: {args.threshold}")
     logger.info("=" * 70)
 
     try:
         # Initialize detector
-        detector = PipetteWellDetector(config_path=args.config)
+        detector = PipetteWellDetector(
+            config_path=args.config,
+            model_checkpoint=args.model,
+            threshold=args.threshold
+        )
 
         # Run inference
         result = detector.infer_and_predict(args.fpv, args.topview)
 
-        # Write output JSON
-        output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Write output
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, 'w') as f:
+                json.dump(result, f, indent=2)
+            logger.info(f"Results written to: {output_path}")
 
-        with open(output_path, 'w') as f:
-            json.dump(result, f, indent=2)
-
-        logger.info(f"Results written to: {output_path}")
-        logger.info(f"Predicted wells: {len(result['wells'])}")
-        logger.info(f"Inference time: {result['metadata']['inference_time_seconds']}s")
-
-        # Print to stdout for easy capture
-        print(json.dumps(result))
+        # Always print to stdout
+        print(json.dumps(result, indent=2))
 
         return 0
-
-    except NotImplementedError as e:
-        logger.error(f"Implementation incomplete: {e}")
-        logger.error("This is a skeleton implementation. TODO items are marked throughout the code.")
-        return 1
 
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
