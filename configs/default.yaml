@@ -1,0 +1,70 @@
+# Default Configuration for Pipette Well Detection
+# Date: April 2026
+
+# Model Configuration
+model:
+  backbone: "resnet18"
+  pretrained: true
+  input_size: [224, 224]
+  num_rows: 8  # Rows A-H
+  num_columns: 12  # Columns 1-12
+  fusion_type: "concatenation"  # Or "cross_attention", "gating"
+
+# Checkpoint & Weights
+checkpoint:
+  path: "models/best_checkpoint.pth"
+  device: "cuda"  # Or "cpu" if GPU unavailable
+
+# Inference Configuration
+inference:
+  batch_size: 1
+  confidence_threshold: 0.5  # Minimum confidence to output a well
+  frame_sampling_rate: 5  # Sample every Nth frame from video
+  max_inference_time_seconds: 120  # 2 minutes max per sample
+  enable_temporal_alignment: true
+
+# Video Processing
+video:
+  target_fps: 30
+  frame_resize: [224, 224]
+  format: "mp4"  # Expected input format
+
+# Augmentation Configuration (for training only)
+augmentation:
+  enable: false  # Only during training
+  temporal:
+    frame_offset: 3  # +/- frames
+    speed_jitter: [0.9, 1.1]
+  geometric:
+    rotation: 8  # +/- degrees
+    scale: [0.9, 1.1]
+    shear: 5  # +/- degrees
+  photometric:
+    brightness: 0.15  # +/- fraction
+    contrast: [1.0, 1.3]
+    blur_kernel: [1, 3]
+    hue_shift: 10  # +/- degrees in HSV
+
+# Post-processing
+postprocessing:
+  apply_cardinality_constraint: true
+  cardinality_head: false  # Use explicit cardinality classifier (future enhancement)
+  sort_canonical: true  # Sort output as A1, A2, ..., H12
+  deduplicate: true
+
+# Logging & Debugging
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  save_diagnostics: false
+  output_confidence_maps: false  # Save heatmaps for visualization
+
+# Output Schema Validation
+output_validation:
+  strict_schema: true
+  require_confidence_scores: false  # Include confidence per well (optional)
+
+# Hardware Configuration
+hardware:
+  use_mixed_precision: true  # AMP during inference
+  num_workers: 4  # DataLoader workers (training only)
+  pin_memory: true

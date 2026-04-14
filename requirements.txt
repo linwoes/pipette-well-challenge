@@ -1,0 +1,28 @@
+# Core ML/DL frameworks
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=0.9.0
+
+# Computer vision
+opencv-python>=4.8.0
+albumentations>=1.3.0
+
+# Scientific computing
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Configuration
+pyyaml>=6.0
+
+# Utilities
+tqdm>=4.65.0
+Pillow>=9.0.0
+
+# Development (optional)
+pytest>=7.0.0
+pytest-cov>=4.0.0
+black>=23.0.0
+flake8>=6.0.0
+
+# GPU support (optional)
+# cudatoolkit>=11.8  # Uncomment if installing CUDA separately
