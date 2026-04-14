@@ -29,7 +29,7 @@ This document provides a **revised, director-grade ML stack recommendation** for
 - **Output:** Factorized (8-class row head + 12-class column head) with calibrated sigmoid + uncertainty quantification
 - **Loss:** Focal loss (γ=2.0) + calibration-aware regularization
 - **Training:** Multi-GPU (distributed), mixed precision, with synthetic data stratification
-- **Inference SLA:** <2 min per dual-view sample (validated target)
+- **Inference SLA:** 20 minutes total for ~10 samples (batch inference, validated target)
 - **Uncertainty Metric:** Expected Calibration Error (ECE) < 0.08, "confident refusal" threshold at p_max < 0.70
 
 **Expected Performance:** 
@@ -402,7 +402,7 @@ Plot predicted confidence (x-axis) vs. actual accuracy (y-axis) for your validat
 
 ### 7.1 Inference SLA
 
-- **Per-sample time:** <2 min (100 dual-view samples in <200 min)
+- **Batch time:** 20 minutes total for ~10 samples (2 min per sample average)
 - Breakdown:
   - Video decode + frame extraction: 5 sec
   - FPV forward pass (8 frames): 30 sec
@@ -467,7 +467,7 @@ Plot predicted confidence (x-axis) vs. actual accuracy (y-axis) for your validat
 1. Fine-tune GPT-4o or Gemini 1.5 Pro on your 100 videos + text descriptions
 2. Use GPT-4o predictions as pseudo-labels for ALL 10,000 synthetic videos (ground truth)
 3. Train a small **SmolVLA** (400M parameters, Vision-Language-Action model) on the pseudo-labeled dataset
-4. Inference: SmolVLA runs locally, <2 min per sample, no GPT-4o calls needed
+4. Inference: SmolVLA runs locally, 20 min batch for ~10 samples, no GPT-4o calls needed
 
 **Expected performance:**
 - SmolVLA accuracy on real samples: 75–85%
@@ -517,7 +517,7 @@ The solution is ready for lab deployment when:
 3. **ECE < 0.08 achieved:** On held-out real samples (N~10), calibration is scientific-grade
 4. **"Confident refusal" working:** System defers ~10% of hard cases; those cases have actual labels obtained via manual inspection
 5. **Cross-view agreement > 70%:** FPV and Top-view mostly agree on validation set
-6. **Inference SLA met:** <2 min per dual-view sample (end-to-end)
+6. **Inference SLA met:** 20 minutes total for ~10 samples (end-to-end batch inference)
 
 ### 10.2 Go/No-Go Checklist
 
@@ -527,7 +527,7 @@ The solution is ready for lab deployment when:
 - [ ] ECE computed and tracked; validation accuracy > 80% at high confidence (p > 0.85)
 - [ ] "Confident refusal" threshold tuned to 5–15% deferral rate on validation
 - [ ] Cross-view agreement > 70% on held-out samples
-- [ ] Inference speed validated: <2 min per sample with 8-frame extraction
+- [ ] Inference speed validated: 20 min total for ~10 samples with 8-frame extraction (batch inference)
 - [ ] Documentation updated: architecture diagrams, training logs, decision rationale
 - [ ] Interview prep: future direction documents (acoustic, distillation, visual servoing, 3DGS) drafted
 

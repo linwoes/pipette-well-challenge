@@ -208,7 +208,12 @@ class TestOutputSchema:
         assert well_tuples == sorted_tuples, "Wells not in canonical order"
 
     def test_multiwell_cardinality_consistency(self):
-        """Test that 8-channel and 12-channel operations are geometrically consistent."""
+        """Test that 8-channel and 12-channel operations are geometrically consistent.
+
+        GEOMETRY:
+        - 8-channel pipette: Same COLUMN (A1, B1, C1, D1, E1, F1, G1, H1)
+        - 12-channel pipette: Same ROW (A1, A2, A3, A4, A5, A6, A7, A8, A9, A10, A11, A12)
+        """
         output_8channel = {
             "wells": [
                 {"well_row": "A", "well_column": 1},
@@ -222,7 +227,7 @@ class TestOutputSchema:
             ]
         }
 
-        # For 8-channel, all wells should be in same column
+        # For 8-channel, all wells should be in same COLUMN (vertical)
         columns = set(w["well_column"] for w in output_8channel["wells"])
         assert len(columns) <= 1, "8-channel operation should have all wells in same column"
 
@@ -233,7 +238,7 @@ class TestOutputSchema:
             ]
         }
 
-        # For 12-channel, all wells should be in same row
+        # For 12-channel, all wells should be in same ROW (horizontal)
         rows = set(w["well_row"] for w in output_12channel["wells"])
         assert len(rows) <= 1, "12-channel operation should have all wells in same row"
 

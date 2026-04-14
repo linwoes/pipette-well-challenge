@@ -459,9 +459,9 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 **Testing:** Measure FVD at each epoch; halt if FVD increases >10%.
 
 ### Risk 5: Temporal Model Compute Overhead
-**Issue:** Temporal Transformer slower than single-frame models; may exceed 2-min inference budget for 10 samples.  
-**Mitigation:** Target <30 sec per sample (well under 2 min); batch processing may provide additional speedup.  
-**Testing:** Profile inference on target hardware (GPU); if >2 min, fallback to fewer frames (T=4 instead of 8).
+**Issue:** Temporal Transformer slower than single-frame models; may exceed 20-min batch inference budget.  
+**Mitigation:** Target <2 min per sample average (20 min for ~10 samples); batch processing may provide additional speedup.  
+**Testing:** Profile inference on target hardware (GPU); if batch >20 min, fallback to fewer frames (T=4 instead of 8).
 
 ---
 
@@ -489,7 +489,7 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 - [ ] Cardinality-wise accuracy ≥ 75% (separate scoring for 1/8/12-well operations)
 - [ ] Cross-view agreement > 70% on hold-out samples
 - [ ] False positive rate < 10% (confident wrong predictions are rare)
-- [ ] Total runtime ≤ 20 minutes (2 min per sample average)
+- [ ] Total runtime ≤ 20 minutes (batch inference for ~10 samples)
 - [ ] No runtime errors, exceptions, or timeouts
 - [ ] Predictions consistent with visual inspection of videos
 

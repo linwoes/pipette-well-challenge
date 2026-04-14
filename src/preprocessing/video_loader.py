@@ -1,92 +1,96 @@
 """
 Video Loader Module: Extract and synchronize frames from dual-view videos
 
-TODO:
-  - Implement load_video() using cv2.VideoCapture
-  - Implement temporal_alignment() with optical flow cross-correlation
-  - Implement frame normalization and resizing
-  - Handle codec variations, missing audio, corrupted frames
+Implements:
+  - load_video(): Load video frames using cv2.VideoCapture
+  - align_clips(): Align FPV and top-view frames by truncation
+  - preprocess_frame(): Resize, normalize, convert BGR→RGB
 """
 
+import cv2
+import numpy as np
+from typing import Tuple
 
-def load_video(video_path: str, target_fps: int = 30, frame_resize=(224, 224)):
+
+def load_video(path: str, max_frames: int = 8) -> np.ndarray:
     """
-    Load video frames from file.
+    Load video frames and sample evenly across video duration.
 
     Args:
-        video_path: Path to MP4 or video file
-        target_fps: Target frame rate (for skipping frames)
-        frame_resize: Target frame dimensions (H, W)
+        path: Path to MP4 or video file
+        max_frames: Maximum number of frames to extract (default 8)
 
     Returns:
-        frames: (T, H, W, 3) numpy array
-        metadata: Dict with fps, duration, frame_count, etc.
+        frames: (N, H, W, 3) numpy array in RGB format
 
-    TODO:
-        1. Open video with cv2.VideoCapture
-        2. Get video properties (FPS, frame count, resolution)
-        3. Extract frames at target_fps intervals
-        4. Resize to frame_resize
-        5. Convert BGR to RGB
-        6. Return as numpy array
-        7. Handle exceptions: missing file, corrupted frames, codec errors
+    Raises:
+        FileNotFoundError: If video file not found
+        IOError: If video cannot be opened or is corrupted
     """
-    raise NotImplementedError("load_video() not yet implemented")
+    cap = cv2.VideoCapture(path)
+
+    if not cap.isOpened():
+        raise IOError(f"Failed to open video: {path}")
+
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    if frame_count == 0:
+        raise IOError(f"Video has no frames: {path}")
+
+    # Calculate frame indices to sample evenly
+    frame_indices = np.linspace(0, frame_count - 1, max_frames, dtype=int)
+
+    frames = []
+    for idx in frame_indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        ret, frame = cap.read()
+
+        if not ret or frame is None:
+            continue
+
+        # Convert BGR to RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame)
+
+    cap.release()
+
+    if not frames:
+        raise IOError(f"No valid frames extracted from video: {path}")
+
+    # Stack frames into array (N, H, W, 3)
+    return np.array(frames, dtype=np.uint8)
 
 
-def find_temporal_offset(fpv_frames, topview_frames, max_offset=10):
+def align_clips(fpv_frames: np.ndarray, topview_frames: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Find temporal offset between asynchronous FPV and top-view videos.
+    Align FPV and top-view frames by truncating to shorter length.
 
     Args:
-        fpv_frames: (T, H, W, 3) numpy array
-        topview_frames: (T, H, W, 3) numpy array
-        max_offset: Maximum frame offset to search (default ±10 frames)
+        fpv_frames: (N, H, W, 3) array of FPV frames
+        topview_frames: (M, H, W, 3) array of top-view frames
 
     Returns:
-        offset: Integer frame offset (positive = fpv leads topview)
-        confidence: Cross-correlation peak value (0-1)
-
-    TODO:
-        1. Compute optical flow for both streams (cv2.calcOpticalFlowFarneback)
-        2. Flatten into 1D motion magnitude vectors
-        3. Cross-correlate: np.correlate(fpv_motion, topview_motion)
-        4. Find peak within [−max_offset, +max_offset]
-        5. Return (offset, confidence)
+        (aligned_fpv, aligned_topview): Both arrays with same length N=min(N, M)
     """
-    raise NotImplementedError("find_temporal_offset() not yet implemented")
+    min_len = min(len(fpv_frames), len(topview_frames))
+    return fpv_frames[:min_len], topview_frames[:min_len]
 
 
-def align_and_extract_frames(fpv_path: str, topview_path: str,
-                              num_frames: int = 2,
-                              target_size: tuple = (224, 224)):
+def preprocess_frame(frame: np.ndarray, size: Tuple[int, int] = (224, 224)) -> np.ndarray:
     """
-    Load both videos, find temporal offset, and return aligned frames.
+    Preprocess frame: resize, normalize to [0, 1], ensure RGB.
 
     Args:
-        fpv_path: Path to FPV video
-        topview_path: Path to top-view video
-        num_frames: Number of frames to extract (default 2)
-        target_size: Target frame dimensions (default 224×224)
+        frame: Input frame (H, W, 3) in RGB format
+        size: Target size (height, width)
 
     Returns:
-        {
-            'fpv_frames': (num_frames, H, W, 3),
-            'topview_frames': (num_frames, H, W, 3),
-            'metadata': {
-                'frame_offset': int,
-                'offset_confidence': float,
-                'fpv_fps': float,
-                'topview_fps': float,
-                'duration_seconds': float
-            }
-        }
-
-    TODO:
-        1. Load both videos with load_video()
-        2. Call find_temporal_offset() to synchronize
-        3. Extract equally-spaced frames across video duration
-        4. Align topview frames by frame_offset
-        5. Return aligned frame pairs
+        Preprocessed frame (size[0], size[1], 3) normalized to [0, 1]
     """
-    raise NotImplementedError("align_and_extract_frames() not yet implemented")
+    # Resize frame
+    resized = cv2.resize(frame, (size[1], size[0]))  # cv2.resize takes (width, height)
+
+    # Normalize to [0, 1]
+    normalized = resized.astype(np.float32) / 255.0
+
+    return normalized

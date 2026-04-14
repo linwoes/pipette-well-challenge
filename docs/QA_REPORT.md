@@ -45,7 +45,7 @@ Cross-checked all document pairs for contradictions, gaps, and alignment.
 **Agreements:**
 - ✓ Both recommend Deep Learning end-to-end (ResNet-18, dual-view fusion)
 - ✓ Both cite 85–95% expected accuracy range
-- ✓ Both specify <2 min inference SLA
+- ✓ Both specify 20 min batch inference SLA for ~10 samples
 
 **Contradictions/Gaps:**
 - **Schema format inconsistency:** README shows output as `{"wells": [{"well_row": "A", "well_column": 1}, ...]}` (well_row, well_column keys)
@@ -82,7 +82,7 @@ Cross-checked all document pairs for contradictions, gaps, and alignment.
 
 **Agreements:**
 - ✓ Both recommend Deep Learning as primary, Classical CV as fallback
-- ✓ Both specify <2 min latency target
+- ✓ Both specify 20 min batch latency target for ~10 samples
 - ✓ Both cite transfer learning from ImageNet
 
 **Contradictions:**
@@ -509,7 +509,7 @@ video:
 1. **test_full_inference_pipeline()** – Load two test videos, run inference, verify JSON output
 2. **test_temporal_alignment()** – Verify FPV/top-view synchronization on known offset
 3. **test_model_output_shapes()** – Verify backbone → fusion → heads produces (B, 8) and (B, 12)
-4. **test_inference_latency()** – Verify <2 min per sample on target hardware
+4. **test_inference_latency()** – Verify 20 min batch for ~10 samples on target hardware
 5. **test_cardinality_constraint()** – Verify 8/12-channel operations produce correct well counts
 6. **test_confidence_thresholding()** – Verify threshold 0.5 produces correct output
 7. **test_json_schema_validation()** – Fix cardinality bug; re-run all schema tests
@@ -604,7 +604,7 @@ Based on audit + original QA_STRATEGY risks:
 - [ ] **I16–I17:** Test bugs fixed (cardinality semantics, assertion logic)
 - [ ] **I19–I20:** Documentation reconciled (schema format, fusion architecture decided)
 - [ ] **test_output_schema.py** runs and passes (except I16)
-- [ ] **Full inference pipeline** tested on 2 local sample videos; produces valid JSON in <2 min each
+- [ ] **Full inference pipeline** tested on 2 local sample videos; batch inference ~2 min per sample average
 - [ ] **Latency profiling** on target hardware (GPU); verify per-sample <1 sec inference
 - [ ] **Edge case spot checks:**
   - [ ] Missing video file → graceful error (not crash)
@@ -624,7 +624,7 @@ Based on audit + original QA_STRATEGY risks:
 - [ ] JSON schema validation passes for all outputs
 - [ ] Exact-match accuracy ≥80% (or ≥70% if hold-out contains many unseen wells)
 - [ ] Cardinality-wise accuracy ≥75% (separate for 1-well, 8-well, 12-well if sample distribution allows)
-- [ ] Total runtime ≤20 minutes (2 min/sample average)
+- [ ] Total runtime ≤20 minutes (batch inference for ~10 samples)
 - [ ] No runtime errors, exceptions, or OOM kills
 - [ ] Predictions consistent with visual inspection (sanity check on 3–5 worst predictions)
 
@@ -828,7 +828,7 @@ A red team review identified critical gaps in strategy and risk assessment. This
   - Masked Autoencoder (MAE) pre-trained on Open X-Embodiment
   - 3D Gaussian Splatting for refraction-aware reconstruction
   - Vision-Language-Action (VLA) for trajectory understanding
-- **QA Position:** ResNet-18 is appropriate for given constraints (100 samples, 2 min inference); recommending upgrade only if validation accuracy <70% after full implementation
+- **QA Position:** ResNet-18 is appropriate for given constraints (100 samples, 20 min batch inference); recommending upgrade only if validation accuracy <70% after full implementation
 
 **What Remains Unmitigated:**
 - Red team recommends investigating VLA/modern architectures; QA defers to ML Scientist judgment

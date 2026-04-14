@@ -63,7 +63,7 @@ Transfyr's "Tacit Knowledge" research posits that expert lab technicians execute
 
 **Constraints:**
 - **Training data:** 100 labeled examples
-- **Inference latency:** ~2 min per sample (20 min for 10 samples)
+- **Inference latency:** 20 minutes total for ~10 samples (batch inference)
 - **Accuracy:** Sufficient to match human labeler on held-out set
 - **Robustness:** Varying lighting, occlusion, plate tilt, pipette geometry
 
@@ -215,7 +215,7 @@ A deterministic, rule-based pipeline that leverages geometric priors about well 
 1. **Interpretability:** Every step is explicit; failures are debuggable (e.g., "grid overlay incorrect" vs. "model confused")
 2. **No training required:** Core geometry logic works out-of-box without labeled data; 100 samples used for validation, not training
 3. **Generalization:** Can adapt to different plate formats (384-well, 1536-well) by changing grid dimensions
-4. **Real-time capable:** Each component is <100ms; total latency ~1–5 sec per video pair (well under 2 min budget)
+4. **Real-time capable:** Each component is <100ms; total latency ~1–5 sec per video pair (well under 20 min batch budget)
 5. **Robustness to variation:** Homography handles plate tilt; color thresholding handles lighting shifts
 6. **Extensibility:** Easy to add post-processing rules (e.g., "filter wells outside plate bounds")
 
@@ -499,7 +499,7 @@ Cons: Higher complexity; decoder network required.
 
 ### Latency Analysis
 
-**Per-sample inference budget:** 2 minutes
+**Batch inference budget:** 20 minutes total for ~10 samples
 
 Breakdown:
 - **Frame extraction & preprocessing:** 100–200ms (load video, decode frames, resize to 224×224)
@@ -826,9 +826,9 @@ Hybrid is a good **fallback option** if either Architecture 1 or 2 underperforms
 
 ### 1. Latency & Performance
 
-**Constraint:** 20 min for 10 samples = 120 sec per sample.
+**Constraint:** 20 minutes total for ~10 samples (batch inference).
 
-**Actual budget:** 2 min = 120 sec (conservative).
+**Actual budget:** 20 minutes total (2 min per sample average, conservative).
 
 **Breakdown:**
 
@@ -1185,7 +1185,7 @@ Late Fusion (after encoding):
 
 ## Conclusion
 
-**Recommended path:** Architecture 2 (Temporal Deep Learning) with Kinetics-400 pre-training, late fusion, synthetic data generation, and explicit dispense event detection. This balances accuracy (88–96%), temporal semantics (first-class), generalization (unseen wells), and latency (<2 min).
+**Recommended path:** Architecture 2 (Temporal Deep Learning) with Kinetics-400 pre-training, late fusion, synthetic data generation, and explicit dispense event detection. This balances accuracy (88–96%), temporal semantics (first-class), generalization (unseen wells), and latency (batch: <20 min for ~10 samples).
 
 **Physical AI commitment:** All architectures explicitly model 3D geometry (projection models, depth, temporal causality) rather than treating the task as 2D image classification.
 
