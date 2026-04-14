@@ -554,7 +554,7 @@ Based on audit + original QA_STRATEGY risks:
 
 ## Section 6: Issue Tracker
 
-### All 23 Issues Identified
+### All 31 Issues Identified (23 Original + 8 Red Team)
 
 | ID | Severity | File | Line(s) | Description | Recommendation |
 |----|----------|------|---------|-------------|-----------------|
@@ -581,6 +581,15 @@ Based on audit + original QA_STRATEGY risks:
 | I21 | MEDIUM | configs/default.yaml | Missing parameters | Focal loss gamma, class weighting, frame count not in config | Add: loss_gamma, class_weighting, num_frames_per_video to config |
 | I22 | HIGH | ML_STACK.md | 1.12 | Frame aggregation via max-pooling not in README | Document in README; clarify inference extracts 2 frames and max-pools outputs |
 | I23 | MEDIUM | README.md, QA_STRATEGY.md | Output schema | Confidence per well is optional in some places, mandatory in others | Clarify: confidence is optional; include in output for debugging but not required |
+| I24 | CRITICAL | QA_STRATEGY.md (NEW) | Section 5.1.2 | Expected Calibration Error (ECE) metric not implemented | Implement ECE computation on validation set; target ECE < 0.10 for hold-out acceptance |
+| I25 | CRITICAL | QA_STRATEGY.md (NEW) | Section 7.1 | Confident Refusal protocol not implemented | Construct 5 adversarial test cases (blur, glare, unseen, dark, rotation); implement test_confident_refusal() gate; ≥ 80% refusal required |
+| I26 | HIGH | QA_STRATEGY.md (NEW) | Section 5.1.3 | Reliability diagram not generated | Generate reliability diagram on validation set; verify curve within ±0.05 of y=x (perfect calibration) |
+| I27 | CRITICAL | QA_STRATEGY.md (NEW) | Section 6.1 | FID score validation not implemented | Implement Fréchet Inception Distance (FID) score between real and synthetic feature distributions; target FID < 15 |
+| I28 | HIGH | QA_STRATEGY.md (NEW) | Section 6.2 | Synthetic label accuracy not validated | Verify synthetic sample labels: detected well positions match ground truth within ±1 pixel at ≥ 98% accuracy |
+| I29 | HIGH | QA_STRATEGY.md (NEW) | Section 3.7 | Glare detection and handling not implemented | Detect saturation (>240 pixel values); if >30% of frame saturated, flag glare and lower confidence threshold or output refusal |
+| I30 | MEDIUM | QA_STRATEGY.md (NEW) | Section 3.7 | Multi-tip segmentation for 8-channel not implemented | Implement morphological segmentation for 8 translucent tips; validate 8 well detections align in row; if fails, flag "MULTI_TIP_DETECTION_FAILED" |
+| I31 | MEDIUM | QA_STRATEGY.md (NEW) | Section 3.8 | Temporal de-duplication not implemented | Implement post-processing rule: if same well predicted in consecutive frames (enter/exit), count only once (avoid duplicate predictions) |
+| I32 | LOW | QA_STRATEGY.md (NEW) | Section 3.8 | Temporal limitation not documented | Document in README: model uses max-pooling over 2 frames; cannot distinguish temporal order; may produce duplicate predictions on fast entry/exit |
 
 ---
 
@@ -621,7 +630,7 @@ Based on audit + original QA_STRATEGY risks:
 
 ---
 
-## Section 8: Recommendations Summary
+## Section 8A: Recommendations Summary
 
 ### Prioritized Actions for Each Role
 
@@ -685,29 +694,250 @@ Based on audit + original QA_STRATEGY risks:
 
 ---
 
-## Section 9: Final Assessment
+## Section 8B: Red Team Response & Risk Re-Assessment
+
+A red team review identified critical gaps in strategy and risk assessment. This section responds to each red team finding and updates QA_STRATEGY.md and issue tracking accordingly.
+
+### Red Team Finding #1: Acceptance Criteria — Reproducibility Over Accuracy
+
+**Red Team Critique:** "Criteria focus on exact-match accuracy. In science, Reproducibility > Accuracy. We should be measuring Uncertainty Calibration."
+
+**QA Assessment:**
+- **Risk Level:** CRITICAL (aligns with QA concerns about domain shift and unseen wells)
+- **Likelihood:** Very High — N=100 dataset makes 85% validation accuracy unreliable without calibration check
+- **Impact:** Model may output high-confidence wrong predictions on hold-out; false confidence breaks scientific reproducibility
+
+**QA Response:**
+- **REVISED QA_STRATEGY.md Section 5:** Added Uncertainty Calibration Framework:
+  - Expected Calibration Error (ECE) < 0.10 as PRIMARY acceptance criterion
+  - Reliability diagram validation (confidence vs. empirical accuracy)
+  - Confident Refusal Rate: ≥ 80% refusal on adversarial inputs
+  - Reordered acceptance hierarchy: (1) Calibration, (2) Accuracy on confident preds, (3) Coverage
+- **Tests Now Cover:** 
+  - ECE computation on validation split
+  - Reliability diagram generation
+  - Confident Refusal protocol (5 adversarial test cases, formal gate)
+  - Hold-out must include 2–3 deliberately hard samples (unseen wells, degraded video)
+- **What Remains Unmitigated:**
+  - Post-evaluation calibration analysis: model ECE on hold-out is unknown until evaluation
+  - Mitigation: Implement confidence score logging; conduct post-hoc analysis after evaluation to validate predictions
+
+**New Issues Added:**
+- I24: CRITICAL — Implement ECE computation and validation (new)
+- I25: HIGH — Construct and validate confident refusal protocol (new)
+- I26: MEDIUM — Generate and validate reliability diagram on val set (new)
+
+### Red Team Finding #2: Synthetic Data Quality Tests
+
+**Red Team Critique:** "Project lacks Synthetic Data Strategy. For 'Physical AI' company, relying on 100 physical samples is failure of scale."
+
+**QA Assessment:**
+- **Risk Level:** CRITICAL (red team directly addresses N=100 overfitting)
+- **Likelihood:** High — without synthetic data, generalization gap will remain 30–40 percentage points
+- **Impact:** Hold-out accuracy will be 50–60% despite 85% training accuracy
+
+**QA Response:**
+- **NEW QA_STRATEGY.md Section 6:** Synthetic Data Quality Tests:
+  - Domain gap measurement (FID < 15)
+  - Label accuracy verification for synthetic samples (≥ 98% well-position match)
+  - Model performance regression test (Real+Synthetic ≥ Real-only accuracy)
+  - Overfitting detection: generalization gap < 15 percentage points
+- **Tests Now Cover:**
+  - FID score between real/synthetic feature distributions
+  - Synthetic label accuracy validation (detected wells vs. ground truth)
+  - Comparative validation: two models (real-only vs. real+synthetic)
+  - Train/val gap analysis
+- **What Remains Unmitigated:**
+  - Synthetic data generation algorithm: QA does NOT validate domain-randomization or generative model quality
+  - Mitigation: Data Scientist owns synthetic data pipeline; QA validates output quality only
+
+**New Issues Added:**
+- I27: CRITICAL — Implement synthetic data FID score validation (new)
+- I28: HIGH — Implement synthetic label accuracy checks (new)
+
+### Red Team Finding #3: Transparency & Specular Reflection Edge Cases
+
+**Red Team Critique:** "Specular reflection (glare) and liquid refraction will shift visual center of well. Current solution assumes well is stable circle."
+
+**QA Assessment:**
+- **Risk Level:** HIGH (not CRITICAL because model can still predict reasonably close well)
+- **Likelihood:** Medium — glare/translucent tips are real but not guaranteed in every hold-out sample
+- **Impact:** Predictions offset by 1–2 wells in glare regions; confidence calibration will suffer (model confident but slightly wrong)
+
+**QA Response:**
+- **NEW QA_STRATEGY.md Section 3.7:** Transparency & Specular Reflection Edge Cases:
+  - Glare on well plate: ≥ 30% saturation = CRITICAL (detection and refusal protocol)
+  - Translucent tip invisible: color-based detection fails (fallback to FPV/temporal)
+  - Liquid meniscus distortion: refraction distorts well center (template matching refinement)
+  - Multi-channel tip array: 8 translucent tips merge visually (morphological separation required)
+- **Tests Now Cover:**
+  - Histogram clipping detection (saturation >240 threshold)
+  - Edge sharpness analysis (refraction creates soft boundaries)
+  - Multi-tip segmentation via blob detection
+- **What Remains Unmitigated:**
+  - Real-world glare patterns: test cases use synthetic glare; actual glare may differ
+  - Refraction magnitude: difficult to predict real-world refractive effect without 3D model
+  - Mitigation: (a) Confidence gating (low confidence in glare regions), (b) Fallback to FPV view if top-view glare detected
+
+**New Issues Added:**
+- I29: HIGH — Implement glare detection and low-confidence gating (new)
+- I30: MEDIUM — Implement multi-tip segmentation (new)
+
+### Red Team Finding #4: Temporal Edge Cases
+
+**Red Team Critique:** "Temporal Blindness... Max-pooling destroys temporal order. Cannot distinguish pipette entering well vs. leaving well."
+
+**QA Assessment:**
+- **Risk Level:** HIGH (but partially mitigated by per-frame detection + max-pooling as design choice)
+- **Likelihood:** Medium — temporal issues manifest only on specific video sequences (slow dispense, hovering, multiple dispenses)
+- **Impact:** Duplicate predictions (well predicted twice: entry and exit) or wrong cardinality (multi-dispense segmented incorrectly)
+
+**QA Response:**
+- **NEW QA_STRATEGY.md Section 3.8:** Temporal Edge Cases:
+  - Hovering without dispensing: pipette approaches but doesn't dispense (expected: no well prediction)
+  - Multiple dispenses: two dispense events in one clip (expected: segment primary event or document which is ground truth)
+  - Partial dispense: early withdrawal mid-dispense (expected: predict well despite incomplete action)
+  - Enter vs. exit confusion: distinguishing descent (entry) from ascent (exit) (expected: one prediction, not two)
+- **Tests Now Cover:**
+  - Trajectory analysis (Z-axis descent/ascent detection)
+  - Temporal segmentation for multi-dispense
+  - Meniscus motion analysis (when liquid motion stops = end of dispense)
+  - Cardinality validation: wells should not repeat across frames
+- **What Remains Unmitigated:**
+  - Temporal model: current design uses max-pooling; doesn't learn temporal order
+  - Mitigation: (a) Document limitation, (b) recommend post-processing de-duplication (if well predicted in consecutive frames, count once)
+  - Future: VLA/Temporal Transformer (red team recommendation; out of scope for N=100 approach)
+
+**New Issues Added:**
+- I31: MEDIUM — Implement temporal de-duplication post-processing (new)
+- I32: LOW — Document temporal limitation and max-pooling design choice (new)
+
+### Red Team Finding #5: Fusion Architecture & Legacy SOTA
+
+**Red Team Critique:** "Uses ResNet-18 (2015) and Focal Loss (2017). These are commodity models. Expected VLA approach where action (pipette trajectory) is first-class citizen."
+
+**QA Assessment:**
+- **Risk Level:** MEDIUM (design choice, not critical for N=100 task)
+- **Likelihood:** N/A (this is strategy, not failure mode)
+- **Impact:** Model may underperform compared to modern Vision-Transformers or VLA approaches; but ResNet-18 is sufficient for well-classification task
+
+**QA Response:**
+- **Acknowledged in QA_STRATEGY.md:** Current approach (ResNet-18 + dual-view fusion) is "conservative/legacy"
+- **Alternative approaches documented but out-of-scope:**
+  - Foundation Model Distillation (GPT-4o auto-labeling)
+  - Masked Autoencoder (MAE) pre-trained on Open X-Embodiment
+  - 3D Gaussian Splatting for refraction-aware reconstruction
+  - Vision-Language-Action (VLA) for trajectory understanding
+- **QA Position:** ResNet-18 is appropriate for given constraints (100 samples, 2 min inference); recommending upgrade only if validation accuracy <70% after full implementation
+
+**What Remains Unmitigated:**
+- Red team recommends investigating VLA/modern architectures; QA defers to ML Scientist judgment
+- Mitigation: If ResNet-18 achieves <70% on hold-out, consider architecture pivot during post-eval analysis
+
+### Updated Project Health Rating
+
+**Previous Rating:** AMBER (issues identified, project ready for mitigation)  
+**New Rating:** AMBER → ORANGE (critical red team findings require significant QA/strategy revision before hold-out)
+
+**Rationale:**
+- Red team identified 5 strategic gaps not previously documented in QA_STRATEGY
+- QA_STRATEGY.md revised to address all 5 findings (added 3 new sections: calibration, synthetic data, temporal/transparency edge cases)
+- 8 new issues identified (I24–I32); 5 are CRITICAL or HIGH severity
+- **Action Required Before Hold-Out:** Implement Confident Refusal protocol (new gate); validate synthetic data pipeline; add temporal post-processing
+
+### Updated Issue Count
+
+**Previous Count:** 23 issues (5 CRITICAL, 8 HIGH, 6 MEDIUM, 4 LOW)  
+**New Count:** 31 issues (6 CRITICAL, 11 HIGH, 11 MEDIUM, 3 LOW)
+
+**New Issues (I24–I32):**
+| ID | Severity | Category | Description |
+|----|----------|----------|-------------|
+| I24 | CRITICAL | Acceptance Criteria | Implement ECE computation and calibration metrics (Section 5.1.2) |
+| I25 | CRITICAL | Testing | Construct and validate 5-case confident refusal protocol (Section 7.1) |
+| I26 | HIGH | Testing | Generate reliability diagram on validation set (Section 5.1.3) |
+| I27 | CRITICAL | Synthetic Data | Implement FID score validation (real vs synthetic features) (Section 6.1) |
+| I28 | HIGH | Synthetic Data | Implement synthetic label accuracy checks (≥ 98%) (Section 6.2) |
+| I29 | HIGH | Edge Cases | Implement glare detection and low-confidence gating (Section 3.7) |
+| I30 | MEDIUM | Edge Cases | Implement multi-tip segmentation for 8-channel (Section 3.7) |
+| I31 | MEDIUM | Post-Processing | Implement temporal de-duplication (enter/exit confusion) (Section 3.8) |
+| I32 | LOW | Documentation | Document temporal limitation and max-pooling design (Section 3.8) |
+
+### Pre-Hold-Out Checklist Update
+
+The following items were added to Section 7.2 (Pre-Submission Testing Checklist):
+
+**NEW: Calibration Validation**
+- [ ] Compute ECE on validation set: ECE < 0.10
+- [ ] Generate and inspect reliability diagram (confidence vs. accuracy)
+- [ ] Accuracy on confident predictions (conf ≥ 0.7): ≥ 90%
+- [ ] Accuracy on uncertain predictions (conf < 0.7): ≥ 60%
+
+**NEW: Confident Refusal Gate**
+- [ ] Construct 5 adversarial test cases (blur, glare, unseen, dark, rotation)
+- [ ] Run test_confident_refusal() protocol
+- [ ] Achieve ≥ 80% refusal rate on adversarial inputs
+- [ ] **STOP and fix if this fails; do not proceed to hold-out**
+
+**NEW: Synthetic Data Validation**
+- [ ] FID score < 15 (real vs synthetic features)
+- [ ] Synthetic label accuracy ≥ 98%
+- [ ] Real+Synthetic model ≥ Real-only model accuracy
+- [ ] Generalization gap < 15 percentage points
+
+**NEW: Transparency/Temporal Edge Cases**
+- [ ] Glare detection test (specular highlight obscures wells)
+- [ ] Multi-tip segmentation test (8 translucent tips in parallel)
+- [ ] Temporal de-duplication test (no well predicted twice from enter/exit)
+
+---
+
+## Section 9: Final Assessment & Success Probability (Updated for Red Team Findings)
 
 ### Summary
 
-The **Pipette Well Challenge is a well-documented project with excellent architectural decisions**, but **implementation is entirely missing**. The codebase is a comprehensive skeleton with clear TODOs, which is preferable to incomplete implementations, but leaves substantial work before evaluation.
+The **Pipette Well Challenge is a well-documented project with excellent architectural decisions**, but faces **critical strategic gaps identified by red team review**. 
+
+**Key Points:**
+- Documentation quality: A+ (clear structure, decision logs)
+- Implementation completeness: 0% (all code is stubs/NotImplementedError)
+- QA strategy adequacy (BEFORE red team): Good (addresses overfitting, class imbalance, edge cases)
+- QA strategy adequacy (AFTER red team): REVISED (now includes calibration, synthetic data, temporal/transparency)
 
 ### Can This Ship?
 
 **Status: NOT READY FOR HOLD-OUT EVALUATION**
 
-**Timeline to Ready:**
-- **CRITICAL implementations (I1–I5):** 3–5 days (1 ML Scientist)
-- **Code completion (I6–I15):** 5–7 days (1 ML Scientist + 1 Architect)
-- **Test implementation (I16–I18):** 2–3 days (1 QA Engineer)
+**Why:**
+1. **Implementation:** 100% of code modules raise NotImplementedError (23 original issues + 9 new red team issues)
+2. **Strategy Gaps:** Red team identified 5 critical gaps (acceptance criteria, synthetic data, transparency, temporal, SOTA)
+3. **New Testing Gate:** Confident Refusal protocol (Section 7.1) must PASS before hold-out (prevents high-confidence wrong predictions)
+
+**Timeline to Ready (REVISED):**
+- **CRITICAL implementations (I1–I5, I24–I25):** 3–5 days (1 ML Scientist + 1 QA Engineer)
+- **Code completion (I6–I23):** 5–7 days (1 ML Scientist + 1 Architect)
+- **Red Team-Driven Additions (I26–I32):** 3–4 days (1 QA Engineer + 1 ML Scientist)
+  - Calibration metrics (ECE, reliability diagram)
+  - Synthetic data validation pipeline
+  - Temporal post-processing (de-duplication)
+  - Glare/transparency detection
+  - Confident refusal gate (5 adversarial test cases)
 - **Integration & validation:** 2–3 days (1 ML Scientist)
 
-**Total: 12–18 days** assuming parallel work and no blockers.
+**Total: 13–19 days** (up from 12–18 due to red team findings); assumes parallel work and no blockers.
 
-### Success Probability
+### Success Probability (REVISED)
 
-**If all recommendations addressed:** 75–85% (depends on generalization gap, unseen wells, domain shift)  
-**If recommendations partially addressed:** 40–60% (likely cardinality or edge case failures)  
-**If recommendations ignored:** <20% (inference will crash; schema validation will fail)
+**If ALL recommendations addressed (original + red team):**
+- Probability: 70–80% (red team findings reduced confidence)
+- Primary risks: (a) synthetic data may not solve N=100 overfitting, (b) temporal design (max-pooling) may create duplicate predictions, (c) domain shift still possible with small real dataset
+
+**If recommendations PARTIALLY addressed (original only, ignoring red team):**
+- Probability: 25–40% (very likely to fail calibration gate or confidence confidence tests)
+- Failure modes: high-confidence wrong predictions on unseen wells, temporal duplicate predictions, miscalibrated confidence
+
+**If recommendations IGNORED:**
+- Probability: <5% (inference crashes, schema validation fails, test suite fails)
 
 ### Key Decision Points
 
@@ -716,6 +946,27 @@ The **Pipette Well Challenge is a well-documented project with excellent archite
 3. **Temporal alignment:** Specify algorithm (currently "TODO")
 4. **Cardinality handling:** Implement post-processing constraint enforcement
 5. **Test coverage:** Implement integration tests before hold-out (not after)
+6. **(NEW) Calibration priority:** Adopt red team's "reproducibility > accuracy" principle; implement ECE metric as primary gate
+7. **(NEW) Synthetic data strategy:** Define how synthetic data will address N=100 overfitting; validate FID score < 15
+8. **(NEW) Confident refusal threshold:** Set confidence threshold for model uncertainty (recommend 0.4); validate ≥ 80% refusal on adversarial inputs
+9. **(NEW) Temporal de-duplication:** Document whether max-pooling design can produce duplicate predictions; implement post-processing fix if needed
+
+### Critical Path (Revised)
+
+**Blocking issues (must resolve before coding can proceed):**
+1. Fusion architecture decision (early vs late) — TEAM_DECISIONS says late, ML_STACK says early
+2. Output schema standardization (well_row/well_column vs row/column)
+3. Temporal alignment algorithm specification
+4. Synthetic data generation approach (GANs? Diffusion? Parametric?)
+
+**Blocking testing gates (must PASS before hold-out):**
+1. ✓ Unit tests (inference.py, video_loader, backbone, fusion, postprocessing)
+2. ✓ Integration tests (dual-view fusion, end-to-end pipeline)
+3. ✓ Schema validation (output format compliance)
+4. **NEW: Calibration validation** (ECE < 0.10, accuracy/confidence alignment)
+5. **NEW: Confident Refusal gate** (≥ 80% refusal on 5 adversarial cases) — **HARD FAIL if not passed**
+6. ✓ Edge case spot checks (glare, dark, rotation, temporal scenarios)
+7. ✓ Latency profiling (<20 min for 10 samples)
 
 ---
 

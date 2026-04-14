@@ -213,6 +213,28 @@ Conservative estimate: Assume each training sample covers **2 wells on average**
 | Duplicate wells | Same well listed twice | **Medium** | Check set(wells) == len(wells) | Deduplicate; sort in canonical order (A1, A2, ..., H12) |
 | Non-uppercase rows | E.g., row="a" instead of "A" | **Medium** | Validate row.isupper() and in [A-H] | Uppercase all rows before output |
 
+### 3.7 Transparency & Specular Reflection Edge Cases (NEW)
+
+Red team identified polystyrene plates + translucent tips as high-risk. These edge cases require special handling.
+
+| Edge Case | Description | Severity | Detection Method | Expected Failure Mode | Mitigation |
+|-----------|-------------|----------|------------------|----------------------|-----------|
+| **Glare on well plate** | Full-frame specular highlight (white saturation) obscures multiple wells, creates false well-like artifacts | **Critical** | Histogram analysis: if >30% pixels saturated (>240/255), flag glare. Compute local contrast: if std_dev > 100 in bright regions, flag specular | Model confuses bright artifacts for wells; predicts false wells outside plate area | Use edge detection + morphology to isolate plate boundary; mask out oversaturated regions; apply local histogram equalization |
+| **Translucent tip invisible** | Pipette tip blends with background (clear/translucent plastic in bright light); tip position indistinguishable from plate background | **High** | Tip detection fails: color-based thresholding returns empty mask; shape detection finds no elongated objects in expected region. Check frame by frame: if tip detectable in <50% of frames, flag | Model cannot localize tip; predicts well at wrong spatial location; off-by-1 or off-by-multiple wells | Switch to FPV view (more tip contrast); use edge/contour detection; fallback to temporal consistency (track tip motion across frames with Kalman filter) |
+| **Liquid meniscus distortion** | Liquid surface at well acts as lens; refracts light and distorts apparent well position; appears offset from true well center | **High** | Analyze well boundary sharpness: meniscus creates soft gradient at well edge instead of sharp boundary. If edge sharpness < threshold, flag refraction | Model detects well center at distorted (refracted) position; prediction offset by 1–2 pixel clusters from true center | Account for refraction in post-processing: well center refinement using template matching on un-distorted well regions; use multiple frames to triangulate true position |
+| **Multi-channel tip array (8 tips)** | 8 translucent tips in parallel row, partially occluded by each other or plate shadows; tips merge visually into continuous line | **Critical** | Multi-tip detection: count distinct tip objects in frame. If count ≠ expected (1, 8, or 12), flag ambiguity. Use HOG or edge profiles to separate individual tips | Model predicts fewer wells than expected (8 tips → 4 predictions if tips merge); cardinality wrong; wells detected at averaged positions rather than individual tip positions | Explicit multi-tip segmentation: apply morphological operations (erosion/dilation) to separate fused tips; use blob detection with expected size constraints; validate 8 well detections align in row; if separation fails, flag "MULTI_TIP_DETECTION_FAILED" |
+
+### 3.8 Temporal Edge Cases (NEW)
+
+Red team identified temporal blindness as a gap. These edge cases address temporal misunderstanding.
+
+| Edge Case | Description | Severity | Detection Method | Expected Behavior | Test Case Design |
+|-----------|-------------|----------|------------------|-------------------|------------------|
+| **Hovering without dispensing** | Pipette positioned directly over well, tip approaches but does NOT enter well or dispense liquid; no dispense event occurs | **High** | Analyze pipette trajectory: if tip_z_position stays constant (hovering) with no liquid motion, flag. Check for meniscus changes: if liquid surface unchanged, no dispense occurred | Model must NOT output a well prediction; refusal (empty wells array) is correct response. If confidence high, it's a false positive | Construct synthetic video: frame 1–30: pipette approaches well A1 to <1mm distance; frames 31–60: pipette hovers stationary over A1; frames 61–90: pipette withdraws. Ground truth: empty wells array (no dispense) |
+| **Multiple dispenses in one clip** | Single 5–10 second video contains TWO separate dispense events into different wells (e.g., dispense to A1, withdraw, move, dispense to B2) | **Critical** | Temporal analysis: detect multiple tip descents and ascents. If descents > 1, flag. Analyze liquid motion: if >1 temporal peak in meniscus change, multiple dispenses | Model must segment events and predict the PRIMARY (first or most visible) dispense only. If cardinality expects multiple outputs, post-processing must handle: output PRIMARY well OR output multiple wells with timestamps (if specification allows) | Frame 1–30: dispense into A1; frames 31–60: withdraw and move; frames 61–90: dispense into B2. Ground truth: either {"wells": [A1]} (primary) OR {"wells": [A1, B2]} with event metadata. **Document which is required** |
+| **Partial dispense (early withdrawal)** | Pipette begins dispensing (tip in well, liquid motion starts) but is withdrawn before completion; dispense incomplete | **High** | Analyze liquid motion timeline: if meniscus change (volume decrease) stops mid-trajectory, flag. Incomplete dispense: final liquid amount < expected dispense volume | Model should output the well where dispense began, even if incomplete. Partial credit: marking as "partial dispense" in metadata is acceptable; should NOT predict wrong well due to timing | Frame 1–20: tip descends into A1; frames 21–40: liquid begins to flow (meniscus drops); frames 41–50: tip withdrawn abruptly while liquid still flowing. Ground truth: {"wells": [A1], "event_type": "partial_dispense"} |
+| **Enter vs Exit confusion** | Model must distinguish between TWO temporal phases: (1) pipette ENTERING well (tip descends, not yet dispensed) vs. (2) pipette EXITING well (tip leaves after dispense). Simple visual similarity between frames at entry and exit can confuse model | **High** | Temporal order validation: check frame timestamps. If pipette is descending (Z increasing frame-by-frame), entry phase; if ascending (Z decreasing), exit phase. Use optical flow to determine direction | Model must NOT predict same well twice (once on entry, once on exit). Correct behavior: predict well ONLY once, during/after dispense. Entry-only or exit-only predictions are errors | Frame 1–30: pipette descends into A1 (entry); frames 31–60: dispense occurs (static position); frames 61–90: pipette ascends away from A1 (exit). Ground truth: {"wells": [A1]} (one prediction, not two) |
+
 ---
 
 ## 4. Failure Mode Analysis
@@ -501,23 +523,372 @@ Conservative estimate: Assume each training sample covers **2 wells on average**
 
 ---
 
-## 5. Robustness Testing Plan
+## 5. Acceptance Criteria & Calibration Framework
 
-### 5.1 Pre-Submission Testing Checklist
+### 5.1 Revised Acceptance Criteria: Reproducibility Over Accuracy
+
+**Red Team Finding:** "Criteria focus on exact-match accuracy. In science, Reproducibility > Accuracy. We should be measuring Uncertainty Calibration."
+
+This section reframes acceptance criteria to prioritize well-calibrated uncertainty over raw accuracy.
+
+#### 5.1.1 Evaluation Hierarchy (Reordered)
+
+**Priority 1: Calibration Quality (Critical)**
+- Expected Calibration Error (ECE) < 0.10 (well-calibrated)
+- Reliability diagram: visualize confidence vs. empirical accuracy
+- Interpretation: model's confidence scores should match reality
+
+**Priority 2: Accuracy on Confident Predictions (Important)**
+- Accuracy on predictions with confidence ≥ 0.7: target ≥ 90%
+- Accuracy on predictions with confidence < 0.7: target ≥ 60% (intentionally lower, model is uncertain)
+- This decouples accuracy from confidence, revealing miscalibration
+
+**Priority 3: Coverage & Refusal Rate (Secondary)**
+- Confident Refusal Rate: % of degraded/unseen inputs correctly rejected (confidence < 0.4)
+- Target: ≥ 80% of intentionally difficult inputs should trigger refusal
+- Coverage: % of well predictions vs. abstentions (target: 90% coverage with <10% uncertainty-triggered abstentions on clean data)
+
+#### 5.1.2 Expected Calibration Error (ECE) Metric
+
+Measure ECE on validation set:
+
+```python
+def compute_ece(predictions, confidences, ground_truth, n_bins=10):
+    """
+    predictions: array of predicted well IDs
+    confidences: array of confidence scores [0, 1]
+    ground_truth: array of true well IDs
+    Returns: ECE in [0, 1]
+    """
+    bins = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    for i in range(n_bins):
+        mask = (confidences >= bins[i]) & (confidences < bins[i+1])
+        if mask.sum() > 0:
+            bin_accuracy = (predictions[mask] == ground_truth[mask]).mean()
+            bin_confidence = confidences[mask].mean()
+            ece += abs(bin_accuracy - bin_confidence) * mask.sum() / len(predictions)
+    return ece
+```
+
+**Acceptance Gate:** ECE < 0.10 (well-calibrated)
+
+#### 5.1.3 Reliability Diagram Validation
+
+Generate reliability diagram on hold-out validation split:
+- X-axis: binned predicted confidences (10 bins: [0–0.1], [0.1–0.2], ..., [0.9–1.0])
+- Y-axis: empirical accuracy within each bin
+- Plot line y=x (perfect calibration)
+- **Acceptance:** Curve should stay within confidence band of ±0.05 around y=x
+
+#### 5.1.4 Calibration on Hold-Out Evaluation
+
+The 10-sample hold-out set must include at least **2–3 deliberately challenging samples designed to trigger uncertainty:**
+
+1. **Unseen Well Test:** At least one sample with a well that has zero training examples
+   - Expected: model outputs low confidence or refusal (confidence < 0.4)
+   - Fail if: model outputs high-confidence (>0.8) prediction for truly unseen well
+
+2. **Degraded Video Quality Test:** At least one sample with:
+   - Heavy motion blur, reduced contrast, or simulated glare
+   - Expected: lower average confidence across predictions
+   - Fail if: confidence stays high despite quality degradation
+
+3. **Novel Context Test:** At least one sample with:
+   - Different lighting, different pipette color, different plate orientation
+   - Expected: model expresses uncertainty (lower average confidence)
+   - Fail if: confidence unchanged from standard conditions
+
+**Scoring:** Accept partial credit if model correctly outputs {"uncertain": true} or empty wells array rather than high-confidence wrong prediction.
+
+#### 5.1.5 Confident Refusal Rate (Formal Protocol)
+
+**Definition:** When model encounters adversarial/degraded input, does it correctly abstain?
+
+**Test Setup:**
+1. Create 5 "intentionally hard" validation samples:
+   - Extreme blur (Gaussian kernel size 9)
+   - 50% brightness reduction
+   - Heavy shadow (dark half of plate)
+   - Horizontal rotation 30°
+   - Unseen well position (trained on A1–D6, test on E7–H12)
+
+2. Run inference on these adversarial samples
+3. Count how many trigger refusal (confidence < 0.4 OR output empty wells)
+
+**Pass Criteria:**
+- ≥ 80% of adversarial samples trigger refusal (≥4 out of 5)
+- When model does predict on adversarial input, accuracy < 50% is acceptable (model uncertain)
+- **Fail Criteria:** Model outputs high-confidence (>0.8) prediction on adversarial input
+
+**Implementation:**
+```python
+def confident_refusal_rate(model, adversarial_samples, confidence_threshold=0.4):
+    refusals = 0
+    for sample in adversarial_samples:
+        output = model.infer(sample)
+        max_confidence = max([w['confidence'] for w in output['wells']] or [0.0])
+        if max_confidence < confidence_threshold or len(output['wells']) == 0:
+            refusals += 1
+    return refusals / len(adversarial_samples)
+```
+
+### 5.2 Acceptance Criteria Summary Table
+
+| Metric | Target | Interpretation | Red Team Alignment |
+|--------|--------|-----------------|-------------------|
+| **ECE** | < 0.10 | Model confidence matches empirical accuracy | Calibration focus |
+| **Accuracy (confident)** | ≥ 90% on conf ≥ 0.7 | When confident, be right | Reproducibility |
+| **Accuracy (uncertain)** | ≥ 60% on conf < 0.7 | Lower bar for uncertain preds | Appropriate uncertainty |
+| **Confident Refusal Rate** | ≥ 80% on adversarial | Say "I don't know" on hard inputs | Uncertainty quantification |
+| **Coverage** | 85–95% | Predictions on clean data; slight abstention on edge cases | Balance precision/coverage |
+| **Exact-Match Accuracy** | ≥ 85% seen wells, ≥ 70% unseen | Overall accuracy; lower bar for unseen | Secondary metric |
+
+---
+
+## 6. Synthetic Data Quality Tests
+
+The red team criticized the project's N=100 overfitting risk and recommended synthetic data generation. This section defines QA tests for synthetic data pipeline.
+
+### 6.1 Domain Gap Measurement
+
+**Objective:** Ensure synthetic data doesn't introduce visual artifacts that break real-world inference.
+
+**Test:** Fréchet Inception Distance (FID) score between real and synthetic feature distributions.
+
+```python
+def compute_fid_score(real_samples, synthetic_samples, model_backbone):
+    """
+    Measure domain gap between real and synthetic video frames.
+    Uses ResNet-18 intermediate features (before classification).
+    """
+    real_features = extract_features(real_samples, model_backbone)  # (N, 512, 7, 7)
+    synthetic_features = extract_features(synthetic_samples, model_backbone)
+    
+    # Compute statistics per spatial location and channel
+    mu_real = real_features.mean(axis=(0, 2, 3))  # (512,)
+    mu_synthetic = synthetic_features.mean(axis=(0, 2, 3))
+    
+    sigma_real = np.cov(real_features.reshape(real_features.shape[0], -1).T)
+    sigma_synthetic = np.cov(synthetic_features.reshape(synthetic_features.shape[0], -1).T)
+    
+    # FID formula
+    fid = np.linalg.norm(mu_real - mu_synthetic) ** 2
+    fid += np.trace(sigma_real + sigma_synthetic - 2 * scipy.linalg.sqrtm(sigma_real @ sigma_synthetic))
+    
+    return fid
+```
+
+**Acceptance Criteria:**
+- FID < 15 (tight domain alignment; FID 0 = perfect, >50 = poor)
+- Interpretation: synthetic features should cluster near real features in embedding space
+
+### 6.2 Label Accuracy Verification for Synthetic Samples
+
+**Objective:** Synthetic data with ground-truth dispensing events must have accurate labels.
+
+**Test:**
+1. Generate 100 synthetic samples with known ground-truth well positions
+2. Run well detection pipeline on synthetic frames
+3. Compare detected well positions to ground truth
+
+**Acceptance Criteria:**
+- Detected well positions match synthetic ground truth within ±1 pixel: ≥ 98% (synthetic labels should be exact)
+- If accuracy < 98%, synthetic data generation has systematic bias
+
+### 6.3 Model Performance: Real Only vs. Real+Synthetic
+
+**Objective:** Ensure synthetic data improves validation accuracy (doesn't hurt).
+
+**Test:** Train two models:
+- Model A: ResNet-18 on 100 real samples only
+- Model B: ResNet-18 on 100 real + 900 synthetic samples
+
+**Validation Split:** Same 30 real samples for both (fair comparison)
+
+**Acceptance Criteria:**
+- Model B validation accuracy ≥ Model A accuracy (synthetic should help or be neutral)
+- Model B validation accuracy - Model A ≥ 0 (no regression allowed)
+- Interpretation: synthetic data does not introduce harmful domain shift
+
+### 6.4 Overfitting Detection: Training vs. Validation Gap
+
+**Objective:** Synthetic data should help generalization; gap between train/val should narrow.
+
+**Test:**
+```python
+training_accuracy = compute_accuracy(model, train_set)
+validation_accuracy = compute_accuracy(model, val_set)
+generalization_gap = training_accuracy - validation_accuracy
+```
+
+**Acceptance Criteria:**
+- Generalization gap < 15 percentage points (red team's baseline concern was 30–40 point gap with N=100)
+- If gap > 15%, model is still overfitting; need more regularization or synthetic data
+
+---
+
+## 7. Robustness Testing Plan
+
+### 7.1 Confident Refusal Testing Protocol (Formal Acceptance Gate)
+
+**Purpose:** Validate that model outputs uncertainty appropriately. This is a NEW acceptance gate that must PASS before hold-out evaluation begins.
+
+#### 7.1.1 Adversarial Test Case Construction
+
+Create 5 validation samples with properties designed to trigger uncertainty:
+
+**Test Case 1: Heavily Blurred Video**
+- Apply Gaussian blur (kernel size 7–9) to all frames
+- Well boundaries become indistinguishable
+- Expected: model confidence < 0.4 OR empty wells array
+- Fail if: model outputs high-confidence (>0.8) predictions
+
+**Test Case 2: Extreme Glare**
+- Brighten 40–50% of frame to saturation (pixel values > 240)
+- Introduce specular highlights on well plate
+- Expected: model outputs low confidence OR refusal
+- Fail if: model confidently predicts wells in glare region
+
+**Test Case 3: Unseen Well Position**
+- Use well position from training data, but place pipette over well NOT in training set
+- Example: if training had wells A1–D6, test with E7, F8, H12
+- Expected: model recognizes unseen well and outputs {"uncertain": true} or low confidence
+- Fail if: model outputs high-confidence prediction for unseen well
+
+**Test Case 4: Severe Underexposure**
+- Reduce brightness 40–50%; image becomes dark, well boundaries disappear
+- Expected: model outputs low confidence
+- Fail if: model maintains high confidence despite darkness
+
+**Test Case 5: Severe Rotation**
+- Rotate frame 25–30°; well grid no longer aligned to image axes
+- Expected: model recognizes out-of-distribution rotation and outputs low confidence
+- Fail if: model predicts rotated grid as if it were standard orientation
+
+#### 7.1.2 Pass Criteria
+
+**Quantitative:**
+- At least 4 out of 5 adversarial test cases must trigger refusal (confidence < 0.4 OR empty wells output)
+- When model does predict on adversarial input: accuracy on adversarial data < 50% is acceptable (model is appropriately uncertain)
+- When model refusals correctly, no penalty
+
+**Qualitative (Manual Review):**
+- Review top-3 adversarial cases where model outputs predictions
+- Inspect confidence scores: should be visibly lower than on clean test data
+- Confidence trajectory over frames should show hesitation (confidence rising/falling, not stable high)
+
+#### 7.1.3 Fail Criteria
+
+**Hard Fail (STOP, do not proceed to hold-out):**
+- Fewer than 4/5 adversarial cases trigger refusal
+- Model outputs high confidence (>0.8) on more than 1 adversarial case
+- Any adversarial case predicts >3 wells (spurious predictions due to noise/artifacts)
+
+#### 7.1.4 Implementation Pseudo-Code
+
+```python
+def test_confident_refusal(model, adversarial_samples, confidence_threshold=0.4):
+    """
+    Validate model's uncertainty behavior on adversarial inputs.
+    Returns: (refusal_rate, fail_reasons)
+    """
+    refusals = 0
+    failures = []
+    
+    for idx, (sample, description) in enumerate(adversarial_samples):
+        output = model.infer(sample)
+        wells = output.get('wells', [])
+        
+        # Check refusal
+        if len(wells) == 0:
+            refusals += 1
+            print(f"✓ Case {idx} ({description}): Refusal (empty wells)")
+            continue
+        
+        max_confidence = max([w['confidence'] for w in wells])
+        
+        if max_confidence < confidence_threshold:
+            refusals += 1
+            print(f"✓ Case {idx} ({description}): Low confidence refusal ({max_confidence:.3f})")
+        else:
+            # High confidence on adversarial input: potential failure
+            failures.append({
+                'case': idx,
+                'description': description,
+                'max_confidence': max_confidence,
+                'well_count': len(wells)
+            })
+            print(f"✗ Case {idx} ({description}): High confidence ({max_confidence:.3f}) on adversarial input")
+    
+    refusal_rate = refusals / len(adversarial_samples)
+    print(f"\nRefusal Rate: {refusal_rate:.2%} ({refusals}/{len(adversarial_samples)})")
+    
+    # HARD FAIL if < 80% refusal rate
+    if refusal_rate < 0.80:
+        return False, f"Refusal rate {refusal_rate:.2%} < 80% threshold"
+    
+    # WARN if high confidences detected (but allow <20% fail rate)
+    if failures:
+        print(f"WARNING: {len(failures)} adversarial cases with high confidence:")
+        for f in failures:
+            print(f"  - Case {f['case']}: {f['description']} (conf={f['max_confidence']:.3f})")
+        return True, f"Passed with {len(failures)} warnings"
+    
+    return True, "All adversarial cases correctly triggered refusal"
+
+# GATE: Must pass before hold-out evaluation
+success, reason = test_confident_refusal(model, adversarial_test_cases)
+if not success:
+    print("ERROR: Confident Refusal test FAILED. Cannot proceed to hold-out evaluation.")
+    sys.exit(1)
+```
+
+---
+
+### 7.2 Pre-Submission Testing Checklist
 
 Before submitting final solution for hold-out evaluation, QA Engineer must verify:
+
+#### Required Implementation & Validation Steps
 
 - [ ] **Unit Tests Pass:** All frame extraction, well classification, JSON serialization tests pass
 - [ ] **Integration Tests Pass:** Dual-view fusion works; no crashes on 10 sample videos
 - [ ] **System Tests Pass:** CLI produces valid JSON for all 10 local test samples in <20 min total
-- [ ] **Edge Case Sanity Checks:** 
+- [ ] **Synthetic Data Validation (NEW):**
+  - [ ] FID score between real and synthetic feature distributions < 15
+  - [ ] Synthetic label accuracy (detected wells match ground truth) ≥ 98%
+  - [ ] Real+Synthetic model accuracy ≥ Real-only model accuracy (no regression)
+  - [ ] Generalization gap (train - val) < 15 percentage points
+- [ ] **Calibration Metrics (NEW):**
+  - [ ] Compute ECE on validation set: ECE < 0.10 (well-calibrated)
+  - [ ] Generate and inspect reliability diagram: curve within ±0.05 of y=x
+  - [ ] Accuracy on confident predictions (conf ≥ 0.7): ≥ 90%
+  - [ ] Accuracy on uncertain predictions (conf < 0.7): ≥ 60%
+- [ ] **Confident Refusal Gate (NEW - MANDATORY):**
+  - [ ] Construct 5 adversarial test cases (blur, glare, unseen well, dark, rotation)
+  - [ ] Run `test_confident_refusal()` protocol (Section 7.1)
+  - [ ] Achieve ≥ 80% refusal rate on adversarial inputs
+  - [ ] **STOP and fix if this fails; do not proceed to hold-out**
+- [ ] **Edge Case Sanity Checks (Updated):**
   - [ ] Rotated plate test (manually rotate one test frame 15°; verify grid detection recovers)
-  - [ ] Glare test (brighten test frame to saturation; verify detections still valid)
-  - [ ] Dark test (darken test frame; verify fallback methods work)
+  - [ ] Glare test (brighten test frame to saturation; verify detections still valid OR refusal triggered)
+  - [ ] Dark test (darken test frame; verify fallback methods work OR confidence < 0.4)
   - [ ] Corrupted frame test (insert noise into one frame; verify pipeline doesn't crash)
+  - [ ] **NEW: Transparency/Specular Reflection test** (Section 3.7 edge cases)
+    - [ ] Test on frame with simulated glare (specular highlight covering 30%+ of plate)
+    - [ ] Verify detections exclude glare region or confidence drops
+  - [ ] **NEW: Temporal Edge Case tests** (Section 3.8)
+    - [ ] Hovering without dispense: model outputs empty wells ✓
+    - [ ] Multiple dispenses: model segments correctly OR documents which dispense (primary) ✓
+    - [ ] Partial dispense: model outputs correct well despite incomplete action ✓
+    - [ ] Enter vs exit: model predicts well only once, not twice ✓
 - [ ] **Schema Validation:** `python -m jsonschema validate output.json schema.json` passes for all outputs
 - [ ] **Timeout Regression:** wall-clock time for 10 samples ≤ 18 min (2 min buffer)
 - [ ] **Memory Profiling:** peak memory during evaluation < 3GB
+- [ ] **Coverage Analysis (NEW):**
+  - [ ] Data scientist provides coverage heatmap: which wells appear in training, which are unseen
+  - [ ] QA identifies 2–3 hold-out samples with unseen wells for uncertainty calibration verification
 
 ### 5.2 Synthetic Perturbation Tests (Design, Not Execution)
 
@@ -978,20 +1349,54 @@ accuracy_weighted = (
 
 ---
 
-### 7.4 Overall Pass/Fail Decision
+### 7.4 Overall Pass/Fail Decision (REVISED: Reproducibility-First)
 
-**Solution passes hold-out evaluation if and only if:**
+**GATE 0 (Pre-Hold-Out, Non-Negotiable):** Confident Refusal test (Section 7.1) must PASS.
+- If Confident Refusal test fails (refusal_rate < 80%), **STOP. Do not proceed to hold-out evaluation.**
+- This ensures model doesn't output high-confidence guesses on adversarial inputs.
 
-| Criterion | Pass Condition |
-|-----------|---|
-| **Accuracy** | accuracy_weighted ≥ 0.75 OR exact_match ≥ 0.80 |
-| **Latency** | total_time ≤ 20 minutes AND all per-sample times ≤ 3 minutes |
-| **Output Format** | 100% of outputs valid JSON AND comply with schema |
-| **No Crashes** | 0 runtime exceptions; all 10 samples produce output |
+**Solution passes hold-out evaluation if and only if ALL of the following are met:**
 
-**Pass Decision:** Solution passes if **all four criteria** are met.
+#### Tier 1: Calibration (Critical — Red Team Priority)
 
-**Partial Credit:** If latency exceeds 20 min but only 7 samples timed out (3 skipped), accuracy is calculated on the 7 completed samples; use for post-eval learning but doesn't constitute a "pass" for final score.
+| Criterion | Pass Condition | Rationale |
+|-----------|---|---|
+| **Calibration Quality** | ECE < 0.10 (well-calibrated) | Red team: reproducibility > accuracy. Model confidence must match reality. |
+| **Confidence-Accuracy Alignment** | Accuracy(conf ≥ 0.7) ≥ 90% AND Accuracy(conf < 0.7) ≥ 60% | When model is confident, be right. When uncertain, lower expectations. |
+| **Refusal on Uncertainty** | Confident Refusal Rate ≥ 80% on hold-out's hard cases | Model must say "I don't know" on unclear inputs, not guess. |
+
+#### Tier 2: Accuracy (Important, but Calibration First)
+
+| Criterion | Pass Condition | Rationale |
+|-----------|---|---|
+| **Exact-Match Accuracy** | ≥ 85% on seen wells, ≥ 70% on unseen wells, weighted average ≥ 80% | Seen wells: tight tolerance. Unseen wells: generalization is harder; lower bar acceptable. |
+| **Cardinality Accuracy** | Separate for 1-well, 8-well, 12-well; ≥ 75% overall cardinality correct | Multi-channel operations must predict correct well count. |
+| **Per-Well Consistency** | Predictions align with visual inspection (human sanity check on 3–5 worst cases) | Edge case validation: does model's worst-case behavior make sense? |
+
+#### Tier 3: Operational (Important but Not Blocking)
+
+| Criterion | Pass Condition | Rationale |
+|-----------|---|---|
+| **Latency** | Total time ≤ 20 minutes AND all per-sample times ≤ 3 minutes | Operational requirement; if calibration is perfect but slow, still worth noting |
+| **Output Format** | 100% of outputs valid JSON AND comply with schema | Non-negotiable for infrastructure |
+| **No Crashes** | 0 runtime exceptions; graceful error handling on all 10 samples | Robustness requirement |
+
+**Pass Decision Logic:**
+```
+IF (Calibration Tier ALL pass) AND (Accuracy Tier at least 2/3 pass) AND (Operational Tier ALL pass):
+    PASS
+ELIF (Calibration Tier PARTIALLY pass) AND (Accuracy Tier 3/3 pass) AND (Operational Tier ALL pass):
+    CONDITIONAL PASS (note: model trades some calibration for raw accuracy; acceptable if ECE < 0.15)
+ELSE:
+    FAIL
+```
+
+**Interpretation:**
+- **PASS:** Model is reproducible (well-calibrated) and accurate. Green light.
+- **CONDITIONAL PASS:** Model is accurate but slightly miscalibrated (ECE 0.10–0.15). Yellow light; recommend uncertainty quantification improvement.
+- **FAIL:** Model fails calibration or crashes. Red light; do not use in production.
+
+**Partial Credit:** If latency exceeds 20 min but all other criteria pass, solution receives a "PASS with latency warning." Document for future optimization.
 
 ---
 

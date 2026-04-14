@@ -61,103 +61,220 @@ JSON array of predicted wells:
 
 ---
 
-## Architecture Decision & Rationale
+## Architecture Decision & Rationale (Post-Red Team Review)
 
-### Chosen Approach: Deep Learning End-to-End
+### Chosen Approach: Temporal Deep Learning with Foundation Models
 
-**Decision:** Use a PyTorch-based neural network with transfer learning from ImageNet pre-trained ResNet-18 backbone.
+**Decision:** Use a PyTorch-based neural network with **VideoMAE (Masked Autoencoder) + Temporal Transformer** as the primary architecture, backed by synthetic data generation (3D Blender simulation + VideoMAE fine-tuning) to scale beyond 100 samples.
 
-**Rationale (from ARCHITECTURE.md):**
+**Key Architectural Shifts (Red Team Response):**
 
-1. **Data efficiency:** 100 labeled samples available; transfer learning leverages ImageNet priors to compensate for small training set
-2. **Accuracy potential:** 85–95% accuracy achievable (vs. 80–90% for classical CV)
-3. **Robustness:** Neural networks inherently robust to lighting variation, minor occlusion, and plate tilt via learned feature representations
-4. **Inference speed:** <500ms per sample on GPU (ample headroom within 2-min budget)
-5. **Extensibility:** Works for any camera/lighting setup within same plate format
-6. **Development maturity:** Standard PyTorch pipeline with well-tested techniques
+1. **Primary Backbone:** VideoMAE-Base (not ResNet-18)
+   - Open X-Embodiment robotics pre-training for spatial grounding
+   - Self-supervised learning on temporal sequences (captures motion semantics)
+   - Data efficiency: fine-tunes on 100 samples; generalizes to 10K+ synthetic data
+   - Rationale: Robotics pre-training is more relevant than ImageNet for tool-substrate interaction
 
-### Alternative Approaches Evaluated
+2. **Temporal Modeling:** Temporal Transformer (mandatory, not optional)
+   - Replaces frame max-pooling which destroys temporal order
+   - Distinguishes pipette entering vs. leaving a well via motion trajectory
+   - Aligned with Transfyr's "Tacit Knowledge" mission: motion intent is first-class
+   - Rationale: A "dispense" is an event, not a static state
 
-1. **Classical Computer Vision (Geometric Pipeline):**
-   - Pros: Interpretable, no training required, generalizable to different plate formats
-   - Cons: Brittle calibration, lighting-sensitive color thresholding, cascading failures
-   - Estimated accuracy: 80–90%
+3. **Synthetic Data Strategy:** 10,000+ synthetic samples (critical mitigation)
+   - 3D Blender simulation: photorealistic rendering of all 96 wells × multiple angles × lighting conditions
+   - VideoMAE fine-tuning: generative sampling to create realistic dispense trajectories
+   - Mix with real data: 50% synthetic + 50% real for balanced training
+   - Rationale: Red team found "100 samples is a failure of scale" for Physical AI company
 
-2. **Hybrid (Geometric priors + Deep Learning):**
-   - Pros: Robust fallback if either approach fails individually
-   - Cons: Implementation complexity, requires tuning blend weights
-   - Recommended as secondary fallback if DL accuracy <85%
+4. **Fusion Architecture:** Late Fusion (mandatory, explicit)
+   - FPV and Top-view have incompatible coordinate systems (perspective vs. orthographic)
+   - Early fusion is geometrically incorrect; late fusion respects projection differences
+   - Each view learns independent well-center localization; uncertainty is traceable
+   - Rationale: Technical leadership alignment; coordinate system integrity
+
+5. **Primary Metric:** Expected Calibration Error (ECE < 0.10), not raw accuracy
+   - In science, reproducibility > accuracy
+   - Model must calibrate confidence scores: saying "I don't know" with 90% certainty is more valuable than overconfident guesses
+   - "Confident Refusal": if max_confidence < 0.70, output {"uncertain": true} instead of guessing
+   - Rationale: Lab environments demand reliability over raw performance
+
+### Baseline Implementation (Preserved for Reference)
+
+The original ResNet-18 single-frame approach has been preserved on the `baseline/resnet-cv-pipeline` branch for:
+- Historical comparison
+- Legacy system compatibility testing
+- Proof-of-concept validation
 
 See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design constraints.
 
+### Alternative Approaches for Research
+
+1. **3D Gaussian Splatting (for glare-heavy scenarios):**
+   - Reconstructs 3D scene from dual-view; ray-traces back-projection to account for refraction
+   - Handles polystyrene refraction and liquid level effects not captured by 2D CNNs
+   - Added as Architecture 4 for future research
+
+2. **Acoustic Cross-Validation (multimodal):**
+   - Transfyr captures audio during dispense; distinctive "click" or "plink" provides independent signal
+   - Cross-modal fusion: visual + audio agreement → high confidence
+
+3. **Visual Servoing (closed-loop control):**
+   - Run FPV model at 30 Hz; iteratively adjust pipette position until error converges
+   - Trade-off: slower (10 sec per sample) but achieves 90–95% accuracy
+
 ---
 
-## ML Stack
+## ML Stack (Post-Red Team)
 
 ### Recommended Technology Stack
 
-**Framework:** PyTorch 2.0+  
-**Backbone:** ResNet-18 (ImageNet pre-trained, ~11M parameters)  
-**Video I/O:** OpenCV (cv2)  
-**Augmentation:** albumentations 1.3+  
-**Output Heads:** Factorized (8-class row + 12-class column)  
-**Loss Function:** Focal loss (γ=2.0) with weighted BCE per head  
+**Framework:** PyTorch 2.1+  
+**Primary Backbone:** VideoMAE-Base (Open X-Embodiment pre-trained, ~87M parameters)  
+**Fallback Backbone:** DINO-v2 (ViT-B/14) as frozen feature extractor  
+**Legacy Baseline:** ResNet-18 (preserved on `baseline/resnet-cv-pipeline`)  
+**Temporal Module:** Temporal Transformer (2–4 attention blocks over ordered frames)  
+**Video I/O:** OpenCV (cv2) with temporal-aware frame extraction  
+**Synthetic Data:** 10K+ videos via (a) VideoMAE fine-tuning, (b) 3D Blender simulation  
+**Augmentation:** albumentations 1.3+ + domain randomization for synthetic-to-real transfer  
+**Output Heads:** Factorized (8-class row + 12-class column) with calibrated sigmoid + uncertainty quantification  
+**Loss Function:** Focal loss (γ=2.0) + calibration-aware regularization  
 **Optimizer:** AdamW + cosine annealing with warmup  
+**Primary Metric:** Expected Calibration Error (ECE < 0.10)  
 **Inference SLA:** <2 min per dual-view sample
 
 ### Key Design Decisions
 
-#### 1. Backbone Architecture (ResNet-18)
-- 11M parameters: lightweight enough to avoid catastrophic overfitting on 100 samples
-- ImageNet pre-training provides strong spatial priors (edges, textures, shapes)
-- Inference speed: ~20–50ms on GPU; acceptable for budget
-- Preferred over MobileNetV3 (5M params) due to better transfer learning support
+#### 1. Backbone Architecture: VideoMAE-Base (PRIMARY)
+- **Why VideoMAE over ResNet-18:**
+  - Spatial grounding via robotics pre-training (Open X-Embodiment, 1M+ robot manipulation videos)
+  - Self-supervised learning on video patches; learns coordinate geometry without supervision
+  - Temporal coherence: fine-tuning on 100 videos stabilizes latent space for generative sampling
+  - Transfer to pipette-liquid interaction is direct (end-effector alignment ≈ well-center alignment)
+  
+- **Fine-tuning approach:**
+  - Masked autoencoder objective on 100 real dispense videos
+  - Use fine-tuned encoder to synthesize 100–200 new videos per well → 10,000 synthetic samples
+  - Extract features from VideoMAE for downstream classification
+  
+- **Fallback: DINO-v2 (ViT-B/14)**
+  - If Open X-Embodiment unavailable; trained on 1.2B unlabeled images
+  - Frozen encoder + linear probe matches ResNet-18 with 50× fewer hyperparameters
+  - Fine-grained spatial features; direct well-center localization from patch embeddings
 
-#### 2. Output Head: Factorized Row + Column
+- **Legacy: ResNet-18**
+  - Preserved on `baseline/resnet-cv-pipeline` for historical comparison
+  - Sufficient as fallback (75–85% synthetic, 60–70% real); insufficient as primary (memorization risk)
+
+#### 2. Temporal Modeling: Temporal Transformer (MANDATORY)
 ```
-Input: (B, 3, 224, 224) ──> ResNet-18 ──> (B, 512) ──┬──> Linear(512→8) ──> Row logits (8,)
-                                                      └──> Linear(512→12) ──> Column logits (12,)
-```
-- **Reduces overfitting:** Predicts 20 independent binary outputs (8+12) instead of 96
-- **Enforces structure:** Multi-well predictions respect plate geometry (all selected wells in same row/column)
-- **Multi-label semantics:** Sigmoid activation allows simultaneous row/column activation (supports 1-well, 8-well, 12-well operations)
-
-#### 3. Focal Loss for Class Imbalance
-```
-Focal loss: FL(p_t) = -α(1 - p_t)^γ log(p_t), γ=2.0
-```
-- Addresses severe class imbalance: 5–15 wells with zero training samples
-- Down-weights easy negatives; focuses on hard positives
-- Per-head application: separate focal losses for row and column predictions
-- Optional class weighting: rare wells weighted 2–10× higher than frequent wells
-
-#### 4. Dual-View Fusion Strategy
-
-FPV and Top-view processed independently, then concatenated:
-```
-FPV stream:    (B,3,224,224) ──> ResNet-18 ──> (B,512)
-                                                    │
-Top-view:      (B,3,224,224) ──> ResNet-18 ──> (B,512)  ──> Concat ──> (B,1024) ──> FC ──> Heads
+Input: (T=4-8 ordered frames, H=224, W=224, C=3)
+    ↓
+Temporal Backbone: VideoMAE or DINO encoder → (T, 768) feature sequence
+    ↓
+Temporal Transformer: 2–4 attention blocks with causal masking
+    ├─ Frame-wise temporal attention
+    └─ Event localization (detect dispense frame)
+    ↓
+Temporal Pooling: Attend to dispense event frame → (768,) features
+    ↓
+Classification Heads: (row logits, col logits)
 ```
 
-**Rationale:**
-- FPV and top-view have different coordinate systems (perspective vs. orthogonal)
-- Late fusion (after spatial feature extraction) preserves view-specific information
-- Symmetric treatment of both views
+**Why temporal Transformer:**
+- Max-pooling over frames is order-agnostic; destroys event semantics (entering ≠ leaving)
+- Temporal attention learns motion patterns: approach phase → dispensing → withdrawal
+- Aligns with Transfyr's mission: motion trajectory encodes expert intent
 
-#### 5. Data Augmentation Strategy (mandatory given 100 samples)
+#### 3. Output Head: Factorized Row + Column
+```
+Fused features (768,) ──┬──> Linear(768→8) ──> Sigmoid ──> Row logits (8,)
+                        └──> Linear(768→12) ──> Sigmoid ──> Column logits (12,)
+```
+- **Reduces overfitting:** Predicts 20 independent outputs (8+12) instead of 96
+- **Enforces structure:** Multi-well predictions respect plate geometry
+- **Uncertainty quantification:** Each head has calibrated confidence; disagreement signals hard cases
 
-**Temporal augmentation (highest priority):**
-- Frame offset: random ±3 frames from ground-truth
-- Speed jitter: playback speed 0.9–1.1×
-- Frame interpolation: linearly interpolate missing frames
-- Expected boost: 3–5× effective dataset size
+#### 4. Late Fusion Strategy (EXPLICIT MANDATE)
+
+FPV and Top-view processed independently, then fused at feature level:
+```
+FPV Video (T=4-8 frames) ──> VideoMAE + Temporal Transformer ──> FPV features (768,)
+                                                                       │
+                                                              Late Fusion Block
+                                                                       │
+Top-view Video (T=4-8 frames) ──> VideoMAE + Temporal Transformer ──> Top-view features (768,)
+                                                                       │
+                                                        Cross-attention or Gating
+                                                                       ↓
+                                                        Fused features (768,) ──> Heads
+```
+
+**Why late fusion is mandatory:**
+- **Coordinate system incompatibility:** FPV uses perspective projection; top-view uses orthographic
+- **Early fusion is geometrically incorrect:** Fusing at feature-map level conflates coordinate systems
+- **Reduces interference:** Each view learns independent spatial extraction; fusion respects native frames
+- **Interpretability:** Can visualize which view dominates per well; traceable uncertainty
+
+#### 5. Synthetic Data Strategy: 3D Simulation + Generative Models (ESSENTIAL)
+
+**Option A: 3D Blender Simulation (recommended for hard negatives)**
+1. Model 96-well plate in Blender with photorealistic rendering
+2. Render all 96 wells × varied camera angles (FPV + top-view) × lighting conditions × pipette trajectories
+3. Generate ~5,000 synthetic frames with perfect ground-truth well coordinates
+4. Use as "hard negatives" to improve robustness (unusual lighting, edge cases)
+
+**Option B: VideoMAE Fine-Tuning (recommended for realistic trajectories)**
+1. Fine-tune VideoMAE-Base on 100 real dispense videos (masked autoencoder objective)
+2. Use latent space to generate 100–200 synthetic videos per well
+3. Target: 5,000 realistic synthetic videos with subtle blur, refraction, liquid dynamics
+4. Condition generation on: well location, pipette angle, lighting, plate orientation
+
+**Combined approach:**
+- 50% Blender synthetic (hard coverage) + 50% VideoMAE-fine-tuned (realistic) + 100% real training
+- Balanced dataset: 10,100 total samples (10K synthetic + 100 real)
+- Validates domain gap: Fréchet Video Distance (FVD) < 20 between synthetic and real
+
+#### 6. Calibration & Confident Refusal (MANDATORY)
+
+**Acceptance Criteria (Revised):**
+
+| Metric | Target | Why |
+|--------|--------|-----|
+| **ECE (Expected Calibration Error)** | < 0.10 | Predictions match reality on validation set |
+| **Exact-match accuracy (high-conf, p > 0.85)** | > 85% | High-confidence predictions must be correct |
+| **"Confident refusal" rate** | 5–15% of test set | System defers uncertain cases; humans handle hard cases |
+| **False positive rate (p_max > 0.90)** | < 10% | Minimize overconfident wrong predictions |
+
+**Confident Refusal Strategy:**
+```json
+If max(row_confidence, col_confidence) < 0.70:
+{
+  "uncertain": true,
+  "predicted_wells": null,
+  "candidates": [
+    {"well": "A4", "confidence": 0.68},
+    {"well": "B5", "confidence": 0.65}
+  ],
+  "action": "defer to human operator for visual inspection"
+}
+```
+
+Why 0.70 threshold: On validation set (N~10), threshold tuning is unstable. Conservative threshold (0.70) reduces false positives; operators trust the model's uncertainty estimates.
+
+#### 7. Data Augmentation Strategy
+
+On top of synthetic data:
+
+**Temporal augmentation:**
+- Frame offset: random ±1 frame from ground-truth
+- Speed jitter: playback speed 0.95–1.05×
+- Frame skip: simulate variable dispensing speed
 
 **Geometric augmentation:**
 - Plate rotation: ±8°
-- Crop/zoom: 90–110% of well ROI
+- Crop/zoom: 90–110% of frame
 - Affine transforms: shear ±5°, scale ±5%
-- Expected boost: 2–3× additional diversity
 
 **Photometric augmentation:**
 - Brightness jitter: ±15% intensity
@@ -165,13 +282,20 @@ Top-view:      (B,3,224,224) ──> ResNet-18 ──> (B,512)  ──> Concat �
 - Gaussian blur: 1–3 pixel kernel
 - Hue shift: ±10° in HSV
 
-#### 6. Training Configuration
+**Domain randomization (for synthetic data):**
+- Camera intrinsics variation
+- Lighting intensity/color shifts
+- Plate material texture variation
+- Liquid appearance variation
+
+#### 8. Training Configuration
 - **Optimizer:** AdamW (weight_decay=1e-5)
 - **Learning rate:** 1e-4 with cosine annealing + 5-epoch linear warmup
-- **Batch size:** 8–16 (limited by 100 samples)
-- **Epochs:** 50
-- **Early stopping:** Monitor validation loss; stop if no improvement for 10 epochs
-- **Regularization:** Dropout 0.3 in FC layers, batch normalization, class weighting
+- **Batch size:** 4–8 (limited by temporal models + 100 real samples)
+- **Epochs:** 50–100
+- **Early stopping:** Monitor validation ECE; stop if no improvement for 15 epochs
+- **Regularization:** Dropout 0.5 in FC, batch normalization, class weighting per DATA_ANALYSIS
+- **Multi-GPU:** Distributed training with mixed precision (fp16)
 
 See `docs/ML_STACK.md` for complete technical specification including code examples, latency analysis, and infrastructure requirements.
 
@@ -400,39 +524,103 @@ pytest tests/ -v
 
 See `docs/QA_STRATEGY.md` for complete edge case catalogue with severity ratings and mitigation strategies.
 
-### Acceptance Criteria
+### Acceptance Criteria (Revised Post-Red Team)
 
 **Before Hold-Out Evaluation:**
-- [ ] Validation accuracy ≥85% on 20 held-out validation samples
-- [ ] Per-well cardinality accuracy ≥80% (1-channel, 8-channel, 12-channel separately)
-- [ ] Inference latency <1 second per sample on target GPU
+- [ ] ECE < 0.10 on 20 held-out real validation samples
+- [ ] Exact-match accuracy > 85% on high-confidence predictions (p_max > 0.85)
+- [ ] Cross-view agreement > 70% (FPV and top-view mostly agree on validation set)
+- [ ] "Confident refusal" rate between 5–15% (system appropriately defers hard cases)
+- [ ] False positive rate < 10% (wrong predictions with high confidence are rare)
+- [ ] Synthetic-to-real transfer gap < 15% (accuracy drop from synthetic to real should be modest)
+- [ ] Inference latency < 2 sec per sample on target GPU (within 2-minute budget)
 - [ ] All edge case tests passing
 
 **On Hold-Out Evaluation (10 unknown samples):**
 - [ ] All 10 samples produce valid JSON output
-- [ ] Accuracy ≥80% on well coordinates (accounting for unseen wells)
+- [ ] Calibration holds: confidence scores match empirical accuracy (ECE < 0.12)
+- [ ] Exact-match accuracy ≥ 70% (accounting for unseen wells, calibration-first approach)
 - [ ] Total runtime ≤20 minutes
 - [ ] No runtime errors or exceptions
-- [ ] Predictions consistent with visual inspection
+- [ ] Uncertain predictions deferred appropriately (not overconfident guesses)
+
+---
+
+## Response to Red Team Review
+
+The red team identified 5 critical gaps in the original ResNet-18 single-frame approach. Here's how the revised strategy addresses each:
+
+### 1. "Overfitting Crisis" (N=100 Problem) → SYNTHETIC DATA STRATEGY
+**Finding:** ResNet-18 with 11M parameters will memorize lighting and background of 100 videos rather than learn geometry.
+**Response:** 
+- Generate 10,000+ synthetic dispense events via 3D Blender simulation + VideoMAE fine-tuning
+- Mix 50% synthetic + 50% real in training (balanced curriculum learning)
+- Validate domain gap via Fréchet Video Distance (FVD < 20)
+- **Result:** Scales from N=100 to N=10,100 with learned spatial grounding
+
+### 2. "Legacy SOTA vs. 2026 Reality" (ResNet-18 is 2015) → VIDEOMAE + ROBOTICS PRE-TRAINING
+**Finding:** ResNet-18 and Focal Loss (2017) are commodity models; Transfyr expects Physical AI with VLA (Vision-Language-Action) approach.
+**Response:**
+- Replace ResNet-18 with VideoMAE-Base pre-trained on Open X-Embodiment robotics data (1M+ manipulation videos)
+- Spatial grounding from robotics transfers directly: end-effector alignment ≈ well-center alignment
+- Self-supervised learning on video patches; coordinates learned without supervision
+- **Result:** 2026-era foundation model with domain-specific pre-training
+
+### 3. "Inconsistency Red Flag" (Early vs. Late Fusion) → EXPLICIT LATE FUSION MANDATE
+**Finding:** ML_STACK specified early fusion (feature-map level) but TEAM_DECISIONS specified late fusion; indicates breakdown in technical alignment.
+**Response:**
+- **Explicit architectural commitment:** LATE FUSION is mandatory (not negotiable)
+- **Geometric rationale:** FPV (perspective) and top-view (orthographic) have incompatible coordinate systems
+- Early fusion too early conflates projections; late fusion respects view-native coordinate frames
+- Each view learns independent well-center detection; disagreement signals uncertainty
+- **Result:** Correct coordinate system handling; interpretable cross-view agreement metric
+
+### 4. "Transparency Risk" (Glare/Refraction) → 3D GAUSSIAN SPLATTING RESEARCH TRACK
+**Finding:** Polystyrene wells refract light; 2D pixel position ≠ true well center. Max-pooling cannot distinguish glare.
+**Response:**
+- Add **3D Gaussian Splatting** as Architecture 4 for future research (glare-heavy scenarios)
+- Reconstruct 3D scene from FPV + top-view; ray-trace through refracted medium
+- Back-project to true well center accounting for liquid level, material properties
+- Near-term: Use Temporal Transformer to detect glare events (low confidence on bright frames)
+- **Result:** Roadmap for handling specular reflection; immediate mitigation via uncertainty
+
+### 5. "Temporal Blindness" (Max-Pooling) → TEMPORAL TRANSFORMER (MANDATORY)
+**Finding:** Max-pooling is order-agnostic; cannot distinguish pipette entering vs. leaving. "Dispense" is an event, not a state.
+**Response:**
+- Replace frame max-pooling with **Temporal Transformer** (2–4 attention blocks)
+- Model motion trajectory: approach phase → dispensing → withdrawal
+- Temporal attention learns causal structure of dispense event
+- Aligned with Transfyr's "Tacit Knowledge" mission: motion intent is first-class
+- **Result:** Temporal semantics captured; event localization (not just classification)
+
+### 6. "Acceptance Criteria Gaps" (Exact-Match vs. Reproducibility) → CALIBRATION-FIRST APPROACH
+**Finding:** Criteria focus on raw accuracy; in science, reproducibility > accuracy. Overconfident guesses are worse than admitting uncertainty.
+**Response:**
+- **Primary metric shifts to ECE (Expected Calibration Error) < 0.10**
+- Predictions must match empirical accuracy on validation set
+- Introduce **"Confident Refusal" gate:** if max_confidence < 0.70, output {"uncertain": true}
+- Operator trusts model's uncertainty scores more than raw accuracy
+- Monte-Carlo dropout or deep ensembles for uncertainty quantification
+- **Result:** Scientific-grade calibration; reproducible confidence scores
 
 ---
 
 ## Known Limitations & Future Work
 
 ### Current Limitations
-1. **Small dataset:** 100 samples → severe overfitting risk; estimated 30% generalization gap
-2. **Unseen wells:** 5–15 wells with zero training examples; zero-shot predictions on these are guesses
-3. **Temporal blindness (single-frame model):** If temporal cues matter, upgrade to 3D CNN
-4. **GPU requirement:** Inference on CPU much slower (~2–3s per sample); deployment assumes GPU availability
-5. **Lighting sensitivity:** While augmentation helps, extreme lighting shifts may degrade performance
+1. **Small real dataset:** 100 samples → severe generalization gap without synthetic data (mitigated by 10K synthetic)
+2. **Unseen wells:** 5–15 wells with zero training examples; zero-shot predictions still risky (mitigated by confident refusal)
+3. **Refraction effects:** 2D pixel accuracy limited by polystyrene/liquid refraction (addressed by 3DGS research track)
+4. **GPU requirement:** Inference on CPU much slower; deployment assumes GPU availability
+5. **Inference latency:** Temporal Transformer slower than single-frame models (~30–60 sec for 8-frame video vs. ~5 sec)
 
 ### Future Enhancements
-1. **Temporal models:** Implement 3D CNN or LSTM to leverage motion signals (tip approach trajectory)
-2. **Confidence calibration:** Use temperature scaling or Platt scaling for reliable confidence scores
-3. **Uncertainty quantification:** Monte-Carlo dropout or ensemble methods for prediction intervals
-4. **Active learning:** Use uncertainty sampling to prioritize which new samples to label
-5. **Online learning:** Retrain on deployment errors to adapt to new pipette types/lighting
-6. **Multi-modal fusion:** Incorporate audio (lab noise cues) or auxiliary sensors
+1. **3D Gaussian Splatting:** Reconstruct 3D scene; ray-trace through refracted medium for pixel-perfect well centers
+2. **Acoustic Cross-Validation:** Use audio (dispense "click") as independent signal; fuse with visual predictions
+3. **Visual Servoing:** Closed-loop control; iterate pipette position until error converges (90–95% accuracy at cost of 10 sec/sample)
+4. **Foundation Model Distillation:** Use GPT-4o to pseudo-label 10K synthetic videos; distill into lightweight SmolVLA
+5. **Active Learning:** Sample uncertainty to prioritize which new well geometries/lighting conditions to label next
+6. **Online Learning:** Retrain on deployment errors; adapt to new pipette types, tip colors, lighting setups
 
 ---
 

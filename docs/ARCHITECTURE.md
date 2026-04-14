@@ -4,14 +4,49 @@
 **Date:** 2026-04-14  
 **Role:** Software/ML Architect  
 **Audience:** ML Scientists, Development Team  
+**Status:** REVISED (Red Team Feedback Integrated)
 
 ---
 
 ## Executive Summary
 
-This document presents two distinct architectural proposals for solving the Transfyr pipette well detection challenge, along with analysis of a hybrid approach. Given the constraints—100 training samples, 2-minute inference budget, multi-label outputs, dual-view inputs, and 96-well grid prediction—both classical CV and deep learning approaches are viable but with different risk/reward profiles.
+This document presents four distinct architectural proposals for solving the Transfyr pipette well detection challenge: Classical CV, Deep Learning (with temporal modeling), Hybrid, and 3D Gaussian Splatting. Given the constraints—100 training samples, 2-minute inference budget, multi-label outputs, dual-view inputs, and 96-well grid prediction—the choice depends on physical accuracy requirements.
 
-**Key Tension:** Interpretability vs. Accuracy given limited data.
+**Critical Insight:** The lab bench is a dynamic 3D physical environment. The pipette is a rigid object moving through space, the plate shifts and tilts, and polystyrene/translucent materials introduce specular reflection and refraction. Robust solutions must model physics explicitly, not treat the task as 2D image classification.
+
+**Key Tension:** 2D pixel accuracy vs. 3D scene geometry; interpretability vs. physical plausibility.
+
+---
+
+## Physical AI Design Principles
+
+Before diving into architectures, we establish a foundation: **Physical AI treats robotics/lab tasks as problems in scene geometry, material properties, and causal relationships—not pixel classification.**
+
+### Core Principles
+
+1. **Scene Geometry Over Pixel Classification**
+   - The well plate has 3D structure: surface depth, well depth, liquid level
+   - The pipette is a 3D object with pose (position + orientation)
+   - The task is: "At what 3D coordinate in lab space is the tip?" not "What pixel in image space is bright?"
+
+2. **Camera Projection Incompatibility**
+   - FPV (first-person view) uses perspective projection: objects at different depths project differently
+   - Top-view uses approximate orthographic projection: pixel position ≈ world position
+   - Early fusion of these feature maps is geometrically incorrect; late fusion respects projection differences
+
+3. **Material Properties Matter**
+   - Polystyrene (plate) reflects and refracts light specularly
+   - Translucent pipette tips transmit and refract liquid
+   - Lambertian assumptions (used in 2D grid detection) fail; depth-aware reasoning is required
+
+4. **Temporal Semantics**
+   - A "dispense" is an event (tip enters → tip stays → tip leaves)
+   - Max-pooling destroys temporal order; motion trajectory encodes expert intent
+   - VLA architectures make action sequences first-class objects
+
+### Relationship to Transfyr's Mission
+
+Transfyr's "Tacit Knowledge" research posits that expert lab technicians execute tasks via learned motor patterns. The pipette trajectory (motion sequence) is a first-class signal, not ancillary. Architectures should respect this by modeling temporal dynamics of the action.
 
 ---
 
@@ -215,195 +250,250 @@ A deterministic, rule-based pipeline that leverages geometric priors about well 
 
 ---
 
-## Architecture 2: Deep Learning End-to-End
+## Architecture 2: Deep Learning with Temporal Modeling
 
 ### Overview
 
-A learned approach using neural networks to map video frames directly to well predictions. Leverages spatial and temporal patterns learned from the 100 training examples.
+A learned approach using neural networks to model video sequences as action trajectories, mapping temporal patterns directly to well predictions. Leverages spatial and temporal patterns learned from the 100 training examples, with explicit temporal attention to identify dispense events.
 
 ### Data Flow
 
 ```
-[FPV Video] ──> Frame Sampling ──> FPV Backbone (ResNet/EfficientNet) ──┐
-                                  (e.g., layer 4 features)               │
-                                                                         ├─> Feature Fusion ──> Decoder ──> Output Head
-                                                                         │
-[Top-view Video] ──> Frame Sampling ──> Top-view Backbone (ResNet/EfficientNet) ──┘
-                                       (e.g., layer 4 features)
+[FPV Video] ──> Frame Sampling ──> Temporal Backbone ──┐
+               (4–8 frames)     (TimeSformer/VideoMAE)  │
+                                or 3D CNN              │
+                                                       ├─> Temporal Fusion ──> Dispense Event ──> Output Head
+                                                       │   (Cross-attention)   Decoder
+[Top-view Video] ──> Frame Sampling ──> Temporal Backbone ──┘
+                    (4–8 frames)    (TimeSformer/VideoMAE)
 
-                                                                         ├─> Multi-label softmax (96-way)
-                                                                         │   OR
-                                                                         ├─> Row head (8-way) + Column head (12-way)
-                                                                         │   OR
-                                                                         └─> Coordinate regression (2-D output)
+                                                       ├─> Multi-label softmax (96-way)
+                                                       │   OR
+                                                       ├─> Row head (8-way) + Column head (12-way)
+                                                       │   OR
+                                                       └─> Sequence-to-label (frame → well ID at dispense)
 ```
+
+**Key Difference from v1:** Temporal models (TimeSformer, VideoMAE, I3D) treat frames as an ordered sequence, not a bag of images. Temporal attention identifies the dispense event (entrance signature in FPV motion) rather than relying on frame pooling.
 
 ### Component Details
 
-#### 2.1 Input Strategy: Frame Sampling vs. Temporal Models
+#### 2.1 Temporal Modeling: Core Architecture Decision
 
-**Option A: Single-frame classification** (Simpler, faster)
-- Extract middle frame from each video (or max-motion frame)
-- Stack FPV + Top-view frames (3 channels each) → 6-channel input OR two separate 3-channel inputs
-- Backbone: ResNet-18/34 or EfficientNet-B0
-- Pros: Fast inference, easy to implement
-- Cons: Ignores temporal dynamics (when dispensing occurs); may miss motion cues
+**RED TEAM FINDING:** Max-pooling over frames destroys temporal order. A "dispense" is a causal event (tip entrance → well insertion → liquid release), not a state. Single-frame models cannot distinguish tip entering vs. leaving.
 
-**Option B: Temporal models** (More powerful, higher latency)
+**Required Approach: Temporal Attention Models**
+
+**Option A: Single-frame + 3D backbone (DEPRECATED for this task)**
+- Extract middle frame; ignore motion
+- Pros: Fast, simple
+- Cons: **DOES NOT WORK** for this task (cannot distinguish dispense phases)
+- Status: REJECTED based on red team critique and Transfyr's "Tacit Knowledge" mission
+
+**Option B: Temporal Models with explicit event detection (RECOMMENDED)**
 - Sample 4–8 frames uniformly across video duration
-- Use 3D CNN (C3D, SlowFast, I3D) or multi-frame concatenation
-- Captures motion patterns: tip approaching well, tip inserting, liquid dispensing
-- Pros: Richer signal; can detect dispensing event implicitly
-- Cons: Higher compute cost; may exceed 2-min budget per sample if not optimized
+- Use **TimeSformer** (vision transformer with temporal attention) or **VideoMAE** (masked autoencoder on video clips)
+- Design: Temporal attention learns motion patterns; output an "event decoder" that identifies frame index where dispense occurs
+- Flow: [T, H, W, 3] → Temporal attention → Per-frame logits + frame-level event probability
+- Pros: Captures motion semantics; identifies dispense event; generalizes to variable-speed dispensing
+- Cons: Higher compute cost (~500ms–2s per sample)
 
-**Option C: Optical flow + RGB** (Hybrid signal)
-- Compute optical flow between consecutive frames
-- Feed [RGB frame, flow components] as 5-channel input
-- Single-frame backbone (ResNet) processes [R, G, B, flow_x, flow_y]
-- Pros: Captures motion without temporal model overhead
-- Cons: Requires flow computation (OpenCV adds latency)
+**Option C: 3D CNN backbone (SlowFast, I3D)**
+- Stack frames as a temporal dimension; convolve spatiotemporally
+- SlowFast: dual pathways (slow=semantic, fast=motion)
+- Pros: Proven on action recognition; lower latency than transformers (~500ms)
+- Cons: Requires careful sampling strategy; less interpretable than attention
 
-**Recommended:** Option A (single-frame) as baseline, with Option C as alternative if accuracy insufficient.
+**Option D: Optical flow + Temporal CNN**
+- Compute optical flow per frame; stack with RGB
+- Feed [R, G, B, flow_x, flow_y] to 3D CNN or 2D CNN with temporal convolution
+- Pros: Explicit motion signal
+- Cons: Optical flow adds preprocessing cost
 
-#### 2.2 Backbone Architecture
+**COMMITMENT:** Recommended **Option B (TimeSformer)** with fallback to **Option C (SlowFast)** if compute budget exceeded. Option A (single-frame) is no longer viable for this architecture.
 
-**Single-view backbone (applied to both FPV and Top-view):**
+#### 2.2 Temporal Backbone Architecture
+
+**For Option B (TimeSformer):**
 
 ```
-Input (3 channels, 224×224) 
+Input: (T=8 frames, H=224, W=224, C=3)
     ↓
-ResNet-18 or EfficientNet-B0
-    ├─ Conv1: 64 filters, 7×7, stride=2
-    ├─ Layer1-Layer3: residual blocks (stride doubling)
-    ├─ Layer4: final residual block (→ 512 channels, 7×7 spatial)
-    ├─ Global avg pool → 512-D vector
+TimeSformer-Base (ImageNet pre-trained, then video pre-trained on Kinetics-400)
+    ├─ Patch embedding: (H×W, C) → (196, 768) [14×14 patches]
+    ├─ Temporal + spatial attention (interleaved blocks)
+    │   Each block: [temporal attention over T] → [spatial attention over HW]
+    ├─ Final classification token (CLS) → (T, 768)
+    ├─ Temporal aggregation (mean pooling) → 768-D vector
     ↓
-Backbone output: (batch, 512)
+Backbone output: (batch, 768)
+```
+
+**For Option C (SlowFast):**
+
+```
+Input: (T=8 frames, H=224, W=224, C=3)
+    ↓
+SlowFast Backbone
+    ├─ Slow pathway: Sample every 2 frames (T_slow=4) → 3D conv (lower framerate, semantic)
+    ├─ Fast pathway: All frames (T_fast=8) → 3D conv with smaller filters (motion detail)
+    ├─ Lateral fusion: Connect pathways via fused blocks
+    ├─ Global avg pool → Concatenate slow + fast features
+    ↓
+Backbone output: (batch, 2048)  [slow: 1024 + fast: 1024]
 ```
 
 **Why these backbones:**
-- **ResNet-18:** Fast, ~11M params, pre-trained on ImageNet available
-- **EfficientNet-B0:** Better accuracy-to-parameter ratio, ~5M params, efficient scaling
-- Both are lightweight enough for 2-min latency budget
+- **TimeSformer:** State-of-the-art on video understanding (Kinetics-400, Something-Something-v2); explicit temporal attention interpretable; pre-training on video motion is directly relevant
+- **SlowFast:** Battle-tested on action recognition; dual-pathway design naturally captures semantic + motion; lower latency than transformers
+- Both are pre-trainable on large-scale video datasets (Kinetics-400, Kinetics-700)
 
-**Pre-training:** Use ImageNet pre-trained weights; fine-tune all layers on the 100 well detection samples.
+**Pre-training:** Use Kinetics-400 pre-trained weights; fine-tune all layers on the 100 well detection samples. Kinetics pre-training is more relevant than ImageNet for motion-aware tasks.
 
-#### 2.3 Feature Fusion
+#### 2.3 Late Fusion Strategy (ARCHITECTURAL COMMITMENT)
 
-**Goal:** Combine FPV and Top-view features into a unified representation.
+**RED TEAM FINDING:** Early fusion is geometrically incorrect. FPV and Top-view have incompatible projection models.
 
-**Approach 1: Concatenation**
+**Geometric Incompatibility:**
+- **FPV (perspective projection):** Depth matters. Object at z=10cm projects differently than z=20cm.
+- **Top-view (orthographic):** All objects at different z project to the same (x, y) pixel.
+- **Early fusion** (fusing feature maps from both views at layer 2–3) conflates these coordinate systems.
+
+**Solution: Late Fusion with Domain-Specific Encoding**
+
 ```
-FPV features (512,)  ─┬─> Concat ──> FC(512+512 → 256) ──> Fused (256,)
-Top-view features (512,) ┘
+[FPV Video Frames] ──> TimeSformer backbone ──> FPV features (768,)
+                                                           │
+                                                   Late Fusion Block
+                                                           │
+[Top-view Video Frames] ──> TimeSformer backbone ──> Top-view features (768,)
 ```
-Simple, fast, symmetric treatment of both views.
 
-**Approach 2: Cross-attention**
+**Fusion Layer (Approach 1: Learned Gating)**
 ```
-FPV features (512,)  ──> Query ──┐
-                                 ├─> Scaled dot-product attention ──> Fused (512,)
-Top-view features (512,) ──> Key/Value ┘
+FPV (768,)  ──┬─> Dense(768 → 256) ──┬─> Gating ──> α·FPV_proj + (1-α)·Top_proj
+              │                       │  α = sigmoid(Dense(1024 → 1))
+Top-view (768,) ──> Dense(768 → 256) ┘
 ```
-More sophisticated; allows FPV to attend to informative regions in top-view.
+Learned weighting respects that each view contributes differently.
 
-**Approach 3: Gating (learn fusion weights)**
+**Fusion Layer (Approach 2: Cross-attention, PREFERRED)**
 ```
-FPV (512,) ──┬─> Gate: α = sigmoid(FC(512+512→1)) ──> α·FPV + (1-α)·Top-view
-Top-view (512,) ┘
+FPV (768,)  ──> Query ──┐
+                        ├─> Multi-head cross-attention (8 heads) ──> Attended FPV (768,)
+Top-view (768,) ──> Key/Value ┘                                       │
+                                                                  ├─> Concat (1536,) ──> FC → (256,)
+                                                                  │
+FPV (768,)  ────────────────────────────────────────────────────┘
 ```
-Lightweight; learned weighting of views.
+Allows FPV features to selectively attend to top-view features while preserving their native coordinate frames.
 
-**Recommended:** Approach 1 (concatenation) for baseline simplicity. Evaluate Approach 2 if accuracy stalls.
+**Why Late Fusion:**
+1. Respects projection geometry (each view encoded in native space first)
+2. Reduces interference between incompatible coordinate systems
+3. More interpretable (can visualize which view dominates per well)
+4. Empirically more robust in stereo/multi-view settings
+
+**COMMITMENT:** All future variants use Late Fusion. Early fusion is explicitly forbidden.
 
 #### 2.4 Output Head Design
 
-**Critical design choice:** How to structure the 96-way multi-label problem.
+**Critical design choice:** How to structure the 96-way multi-label problem while maintaining temporal sensitivity.
 
-**Option A: 96-class multi-label softmax**
+**Option A: 96-class multi-label with per-frame logits**
 ```
-Fused features (256,) ──> FC(256 → 96) ──> Sigmoid (per-well probability)
-Output: logits[96], each ∈ [0, 1] (independent probabilities)
+Fused features (T=8, 256,) ──> FC(256 → 96) per frame ──> Sigmoid (per-frame, per-well probability)
+                            ──> Temporal aggregation (mean/max over T) ──> Output logits[96]
+Output: wells with prob > 0.5 are predicted active
 Loss: Binary cross-entropy per well
-Threshold: wells with prob > 0.5 are predicted active
 ```
-Pros: Direct; intuitive probability interpretation.
-Cons: Treats each well independently (ignores spatial correlation); may overfit with 100 samples.
+Pros: Direct; captures temporal dynamics in intermediate features.
+Cons: Treats each well independently; temporal aggregation (mean/max) still suboptimal.
 
-**Option B: Factorized (Row + Column heads)**
+**Option B: Sequence-to-Label (Event-focused, RECOMMENDED)**
 ```
-Fused features (256,) ──┬─> FC(256 → 8) ──> Softmax over rows ──> row_logits[8]
-                        └─> FC(256 → 12) ──> Softmax over cols ──> col_logits[12]
+Fused features (T=8, 256,) ──> Temporal attention decoder ──> Event logits (per frame)
+                           ──> Dispense event index (frame_idx ∈ [0, T-1]) (argmax)
+                           ──> Spatial head at frame_idx ──> FC(256 → 96) ──> well logits
+```
+Output: (well_id, confidence, dispense_frame_idx)
+Loss: Cross-entropy on frame index + cross-entropy on well ID (2-task learning)
 
+This explicitly models "when did the tip enter the well?" and "which well?"
+Pros: Temporal event detection built-in; interpretable (can visualize which frame triggered prediction); aligns with VLA paradigm.
+Cons: Requires frame-level annotations (can be derived from multi-frame labels via interpolation).
+
+**Option C: Factorized (Row + Column heads) with temporal aggregation**
+```
+Fused features (T=8, 256,) ──┬─> Temporal pool (mean over T) ──> FC(256 → 8) ──> Softmax ──> row_logits
+                             └─> FC(256 → 12) ──> Softmax ──> col_logits
 Output: Outer product logits[8, 12]
-Prediction: wells where row[i] * col[j] > threshold
-Loss: Cross-entropy on row/col predictions separately
 ```
-Pros: Reduced parameters; enforces structure (fewer parameters = less overfitting with 100 samples).
-Cons: Assumes independence of row/col (not always true; some rows/cols may be inaccessible).
+Pros: Reduced parameters; spatial structure enforced; fast.
+Cons: Loses temporal information in the pooling step (defeats the purpose of temporal modeling).
 
-**Option C: Coordinate regression**
+**Option D: Per-well heatmap + temporal peak detection**
 ```
-Fused features (256,) ──> FC(256 → 2) ──> (x, y) ∈ [0, 7] × [0, 11] (continuous)
-Loss: L2 or Huber loss (regression)
-Post-process: Round to nearest well; for multi-channel, apply clustering to detected tips
+Fused features (T=8, 256,) ──> Decoder ──> Heatmaps (T, 8, 12)  [T temporal frames, 8x12 well grid]
+Extract peaks: For each of T frames, find local maxima in the 8x12 grid
+Temporal localization: Find frame where each well's activation peaks
+Output: (well_id, peak_confidence, peak_frame_idx)
+Loss: L2 + temporal localization loss
 ```
-Pros: Natural for single-well case; continuous representation.
-Cons: Difficult to extend to multi-well; regression targets may be ill-defined if multiple wells active.
+Pros: Spatial + temporal coherence; multi-well naturally detected as multiple peaks.
+Cons: Higher complexity; decoder network required.
 
-**Option D: Keypoint detection (advanced)**
-```
-Fused features ──> Heatmap decoder (8×12 spatial output)
-Heatmaps: Per-well activation map (sigmoid)
-Output: Extract peaks (non-maximum suppression) to get well coordinates
-Loss: L2 on heatmaps, or focal loss
-```
-Pros: Spatial coherence; can detect multiple peaks naturally.
-Cons: Higher complexity; requires decoder design (transposed conv layers).
-
-**Recommended:** Option B (factorized row/column) for 100-sample setting, as it reduces overfitting risk while maintaining expressiveness. Validate against Option A.
+**RECOMMENDATION:** **Option B (Sequence-to-Label)** is aligned with Transfyr's VLA mission and red team feedback. Temporal event detection is first-class, not afterthought. Fallback to **Option C** (factorized row/col) if compute budget exceeded.
 
 #### 2.5 Training Strategy for Limited Data
 
-**Challenge:** 100 samples is very small for deep learning. Overfitting is the primary risk.
+**Challenge:** 100 samples is very small for deep learning; extreme class imbalance (some wells appear 0–2 times). Overfitting and memorization are severe risks.
 
-**Strategy 1: Transfer Learning + Heavy Augmentation**
-- Start with ImageNet pre-trained ResNet-18 / EfficientNet-B0
-- Freeze early layers (conv1, layer1); fine-tune layer2 onwards + fusion + head
-- Augmentation:
-  - Random crop (224 → 224)
+**RED TEAM FINDING:** Relying on 100 physical samples without synthetic data generation is a failure of scale. A 11M-parameter ResNet will memorize background/lighting of specific videos rather than learn geometry.
+
+**Strategy 1: Transfer Learning + Heavy Augmentation (FOUNDATION)**
+- Start with **Kinetics-400 pre-trained TimeSformer** or **SlowFast** (not ImageNet)
+- Freeze early temporal layers (first 2–3 blocks); fine-tune later layers + fusion + head
+- Augmentation (per-frame):
+  - Random spatial crop (224 → 224)
+  - Temporal jitter (sample ±1 frame offset per clip)
   - Rotation (±10°)
   - Brightness/contrast shift (±20%)
   - Gaussian blur
-  - Horizontal flip (if plate orientation is symmetric)
-  - ColorJitter (simulates lighting variation)
+  - Horizontal flip (if plate symmetric)
+  - ColorJitter (lighting variation)
+- Temporal augmentation:
+  - Reverse frame order (check if temporal symmetry valid)
+  - Frame skip (simulate variable dispensing speed)
+  - Frame interpolation (synthetic frames between real frames)
 - Regularization:
   - Dropout (p=0.5) in FC layers
   - L2 weight decay (λ=1e-4)
   - Early stopping on validation set (80/20 train/val split)
-- Batch size: 8–16 (small due to data size)
-- Optimizer: Adam, lr=1e-4, exponential decay
+  - Mixup (on feature space, not input space)
+- Batch size: 4–8 (small due to data size and temporal models)
+- Optimizer: AdamW, lr=1e-4, cosine annealing decay
 
-**Strategy 2: Data Augmentation (synthetic samples)**
-- For each training video, generate synthetic variants:
-  - Simulate plate rotation (+±5°)
-  - Simulate camera blur (motion blur filter)
-  - Simulate lighting changes (overlay gamma correction)
-  - Horizontal/vertical flip if valid
-- Augmentation factor: 5–10× (creating 500–1000 synthetic examples)
-- Train on augmented set; validate on original 20 unaugmented samples
+**Strategy 2: Synthetic Data Generation (ESSENTIAL per red team)**
+- Generate synthetic video clips for wells with <3 training samples
+- Use Stable Video Diffusion (fine-tuned on lab footage) to create:
+  - Pipette approaching well from different angles
+  - Tip entering, hovering, exiting
+  - Lighting variations (shadow, glare)
+- Target: Create 5–10× synthetic variants per well (500–1000 synthetic clips total)
+- Mix synthetic + real in training (50/50 split or curriculum learning)
 
-**Strategy 3: Few-shot / Meta-learning (optional, advanced)**
-- Treat as few-shot classification: given K examples per well (K=1–2), learn to recognize new wells
-- Use prototypical networks or MAML (Model-Agnostic Meta-Learning)
-- More complex; evaluate after Strategy 1
-
-**Strategy 4: Self-supervised pre-training (if raw video available)**
-- Use unlabeled video frames to pre-train backbone via contrastive learning (SimCLR)
+**Strategy 3: Self-supervised pre-training on unlabeled video (IF available)**
+- Use any unlabeled lab video to pre-train backbone via contrastive learning
+- Methods: MoCo v3 on video, masked autoencoding (VideoMAE)
 - Fine-tune on labeled 100 samples
-- Requires additional unlabeled video data
+- Provides stronger feature initialization than Kinetics-400 (if domain very different)
 
-**Recommended:** Strategy 1 (Transfer + Augmentation) as foundation. Implement Strategy 2 if accuracy is <90% on validation set.
+**Strategy 4: Few-shot / Meta-learning (optional, advanced)**
+- Prototypical networks or MAML: given K examples per well (K=1–2), learn to generalize to new wells
+- Evaluate after Strategy 1 if class imbalance remains problematic
+
+**RECOMMENDATION:** **Strategy 1 + Strategy 2 (Transfer + Synthetic Data)** is mandatory. Kinetics-400 pre-training is non-negotiable for temporal models. Synthetic data generation is essential to scale beyond 100 samples.
 
 ---
 
@@ -465,7 +555,215 @@ For 10 samples: ~1.6s (GPU) or ~20–30s (CPU) — **well under 2-min budget**.
 
 ---
 
-## Architecture 3: Hybrid Approach (Optional)
+## Architecture 3: 3D Gaussian Splatting (3DGS) Scene Reconstruction
+
+### Overview
+
+A physically-grounded approach that reconstructs the 3D geometry of the lab scene from dual-view video, enabling depth-aware well localization and handling of specular reflections/refractions. This is the most robust long-term solution but computationally expensive.
+
+### Motivation: Why 3D Geometry is Required
+
+**RED TEAM FINDING:** Polystyrene plates and translucent pipette tips introduce specular reflection and refraction that 2D CNN solutions cannot handle.
+
+**Physical Phenomena:**
+1. **Glare shift:** Specular reflection shifts the "visual center" of a well in the image plane, but the well itself remains fixed in 3D space
+2. **Refraction:** Liquid in the well refracts light; the apparent well position shifts with viewing angle
+3. **Depth ambiguity:** Without depth, cannot distinguish between "tip at surface of well" vs. "tip at bottom of well"
+
+**2D CNN Failure Mode:** Trains on pixels, not 3D coordinates. Will memorize that "glare blob at pixel (x, y) means well A5" instead of learning "the actual well center is at 3D position (x_world, y_world, z_world)".
+
+**3D Scene Reconstruction Solution:** By fitting Gaussian primitives to the 3D scene, we:
+- Explicitly model depth and lighting
+- Reason about well positions in world coordinates, not pixel space
+- Handle glare/refraction via explicit depth estimation
+
+### Data Flow
+
+```
+[FPV Video] ──┐
+              ├─> Camera Calibration (intrinsics + extrinsics) ──┐
+[Top-view Video] ──┘                                            │
+                                                                ├─> Structure-from-Motion / SLAM
+                                                                │   (sparse 3D point cloud)
+                                                                │
+                                                                ├─> 3D Gaussian Splatting Optimizer
+                                                                │   (fit Gaussians to scene)
+                                                                │
+                                                                ├─> Depth Estimation (render depth maps)
+                                                                │
+                                                                ├─> Well Localization
+                                                                │   (3D scene search for well-like Gaussian clusters)
+                                                                │
+                                                                └─> JSON Output
+```
+
+### Component Details
+
+#### 3.1 Camera Calibration
+
+**Goal:** Estimate camera intrinsics (K_fpv, K_topview) and relative extrinsics (R, t) between FPV and top-view.
+
+**Approach:**
+- Mount a checkerboard calibration pattern in the lab
+- Capture synchronized images of the checkerboard from both cameras
+- Use OpenCV `cv2.calibrateCamera()` and `cv2.stereoCalibrate()` to compute:
+  - Focal length, principal point (intrinsics)
+  - Rotation matrix R and translation vector t (extrinsics between cameras)
+- Store as calibration.yaml (one-time setup, ~1 hour)
+
+**Implementation notes:**
+- Checkerboard must cover multiple depths (near and far from cameras) for robust calibration
+- Validation: Reprojection error <1 pixel for all calibration points
+
+#### 3.2 Structure-from-Motion (SfM) & Sparse 3D Reconstruction
+
+**Goal:** Estimate sparse 3D positions of key points (well centers, pipette tips, plate edges) from video.
+
+**Approach:**
+- Extract SIFT/ORB features from FPV and top-view frames
+- Compute feature matches across frames (within same view) and across views
+- Estimate essential matrix F; decompose into R, t
+- Triangulate matched features using calibrated cameras to get 3D coordinates
+- Filter outliers via reprojection error threshold
+
+**Alternative (faster):** Use COLMAP or ORB-SLAM if available; these handle temporal consistency better.
+
+**Output:** Sparse point cloud (~1000–10000 points) representing scene geometry.
+
+#### 3.3 3D Gaussian Splatting (Core Innovation)
+
+**What is 3DGS?**
+3D Gaussian Splatting represents a scene as a set of 3D Gaussians (parameterized by position, covariance, opacity, color). The advantage: these Gaussians can be differentiably rendered to match input images, enabling optimization without voxels or implicit functions.
+
+**Process:**
+
+1. **Initialization:**
+   - Start with sparse SfM point cloud
+   - Fit a Gaussian to each point cloud cluster (e.g., 10 Gaussians per well plate region)
+   - Initialize Gaussian parameters: center = point position, covariance = small isotropic, color = average image color at point
+
+2. **Optimization:**
+   ```
+   Objective: Minimize ||I_rendered - I_observed||^2 + regularization
+   Variables: Position, covariance, opacity, color per Gaussian
+   Renderer: Splatting (project 3D Gaussians to 2D, blend by opacity)
+   ```
+   - Alternately optimize FPV view and top-view view
+   - Use gradient descent (Adam) to refine Gaussian parameters
+   - Regularization: sparsity (penalize non-zero opacity), smoothness (penalize covariance explosion)
+
+3. **Refinement:**
+   - Iteratively split large Gaussians and prune small ones
+   - Run for 5000–10000 iterations (typically hours for large scenes, seconds for plate-sized scenes)
+
+**Rendering:**
+For any novel viewpoint (including the original FPV/top-view), render a 2D image by:
+- Project 3D Gaussians to 2D
+- Sort by depth
+- Alpha-blend colors and opacities (front to back)
+
+#### 3.4 Depth-Aware Well Localization
+
+**Goal:** Find well positions by analyzing the 3D scene (not image pixels).
+
+**Approach 1: Cluster Gaussians (Geometry-based)**
+- Look for clusters of high-opacity Gaussians at roughly the same z-depth (surface of plate)
+- Cluster in 2D (x, y) space after filtering by z ≈ z_plate
+- Cluster centers approximate well positions
+- Count clusters; validate that #clusters ≈ 96
+
+**Approach 2: Render Depth Maps (Physics-based)**
+- Use the optimized Gaussians to render a depth map from a virtual top-view camera
+- Apply blob detection to the depth map to find well centers (wells appear as circular depressions)
+- Refine with sub-pixel accuracy
+
+**Approach 3: Learned Decoder on Rendered Features**
+- Render features (not RGB) from the Gaussian splat: e.g., per-Gaussian class scores (well vs. plate vs. pipette)
+- Attach a small CNN decoder to detect well positions from rendered feature maps
+- Hybrid: combines geometry (3D scene) with learned refinement
+
+**Recommended:** Approach 2 (depth map rendering) for interpretability; fallback to Approach 3 if accuracy insufficient.
+
+#### 3.5 Pipette Tip Localization
+
+**Goal:** Localize the pipette tip in 3D space.
+
+**Approach:**
+- Fit a separate set of Gaussians to represent the pipette (high color variance, thin/needle-like structure)
+- Search for Gaussian clusters that match pipette properties (color, opacity pattern, elongation)
+- Tip center = highest point in the pipette Gaussian cluster
+- Confidence: weighted by opacity and reprojection error
+
+#### 3.6 Output Generation
+
+**Assembly:** Match dispense event (from temporal model or manual frame annotation) to tip and well positions.
+
+```json
+{
+  "wells": [
+    {"row": "A", "column": 1, "confidence": 0.98, "world_position": [10.5, 20.3, 5.0]},
+    {"row": "A", "column": 2, "confidence": 0.95, "world_position": [14.5, 20.3, 5.0]}
+  ],
+  "pipette_tip_position": [12.5, 20.3, 0.5],
+  "depth_confidence": 0.92,
+  "scene_reconstruction_rmse": 0.8
+}
+```
+
+---
+
+### Strengths
+
+1. **Physically correct:** Reasons in 3D space, not pixel space. Handles specular reflections and refraction naturally.
+2. **Depth-aware:** Explicit depth estimation; can distinguish well surface vs. bottom.
+3. **Robust to glare:** Glare is a 2D artifact; 3D scene geometry is unaffected.
+4. **Interpretable:** Gaussian positions and opacities are human-readable; can visualize scene.
+5. **Novel view synthesis:** Can render scene from arbitrary camera angles (useful for validation).
+6. **Generalization:** Once scene is reconstructed, can apply classical well detection (grid overlay) in 3D.
+
+---
+
+### Weaknesses & Computational Cost
+
+1. **Slow inference:** SfM + 3DGS optimization can take **10–60 minutes per sample** (depending on scene complexity and GPU), exceeds 2-min latency budget significantly.
+2. **Calibration required:** Accurate camera calibration is essential; miscalibration propagates to 3D positions.
+3. **Sparse features:** If plate is featureless (solid color), feature matching may fail; SfM becomes impossible.
+4. **Gaussian explosion:** Naive optimization can produce thousands of Gaussians; pruning heuristics may be needed.
+5. **Temporal inconsistency:** Independent optimization per frame pair; no temporal coherence across video (can be addressed with temporal regularization).
+
+---
+
+### When to Use Architecture 4
+
+- **Glare failures dominate error analysis:** If 2D models fail specifically on high-glare wells, 3DGS solves the problem.
+- **High-precision requirement:** If accuracy must exceed 98%, 3D reasoning helps.
+- **Limited to <1 sample per day:** Latency is prohibitive for high-throughput labs, but acceptable for careful validation.
+- **Research/publication:** Demonstrates Physical AI rigor (excellent for CV conferences).
+
+### When NOT to Use Architecture 4
+
+- **Real-time requirements:** 2-min latency budget is non-negotiable.
+- **Featureless plates:** Sparse features break SfM.
+- **Production deployment:** Overhead not justified if Architectures 2/3 meet accuracy targets.
+
+---
+
+## Architecture 4b: Lightweight 3D (Optional Compromise)
+
+If 3DGS is too slow but depth modeling is desired:
+
+**Lightweight approach:** Use a monocular depth estimator (MiDaS v3.1) to predict depth from each view, then:
+- Back-project FPV depth to 3D using camera intrinsics
+- Use top-view as orthographic depth (all points at plate surface)
+- Triangulate FPV tip position using predicted depth + top-view well coordinates
+
+**Latency:** ~500ms per sample (depth estimation is fast)
+**Accuracy:** Lower than full 3DGS, but avoids SfM calibration overhead
+**Status:** Fallback for time-constrained projects
+
+---
+
+## Architecture 5: Hybrid Approach (Optional)
 
 ### Overview
 
@@ -634,54 +932,117 @@ $ python pipette_detect.py --fpv ./fpv.mp4 --topview ./topview.mp4 --output resu
 
 ## Comparative Analysis
 
-| Criterion | Classical CV | Deep Learning | Hybrid |
-|-----------|--------------|---------------|--------|
-| **Accuracy (est.)** | 80–90% | 85–95% | 90–97% |
-| **Interpretability** | High | Low | Medium |
-| **Training data needed** | None (for geometry) | 100 (all available) | 100 |
-| **Inference latency** | 1.6–3.1 sec | 0.3–0.5 sec | 0.8–1.5 sec |
-| **Extensibility (new format)** | High | Low | Medium |
-| **Robustness (lighting)** | Medium | High | High |
-| **Robustness (occlusion)** | Medium | Medium | High |
-| **Development time** | 2–3 weeks | 1–2 weeks | 3–4 weeks |
-| **Maintenance burden** | Low | Medium | Medium–High |
-| **GPU required?** | No | Yes | No (optional) |
-| **Failure mode** | Cascading (plate → tip) | Single point (network) | Degraded (one module fails) |
+| Criterion | Classical CV | DL w/ Temporal | 3DGS | Hybrid (DL+CV) |
+|-----------|--------------|-----------------|------|---|
+| **Accuracy (est.)** | 80–90% | 88–96% | 95–99% | 92–97% |
+| **Interpretability** | High | Medium | Very High | Medium–High |
+| **Training data needed** | None (for geometry) | 100 (+ synthetic) | 100 + calibration | 100 |
+| **Inference latency** | 1.6–3.1 sec | 0.8–2 sec | 10–60 min | 1.5–3 sec |
+| **Physical realism** | Low (2D grid) | Medium (temporal) | **Very High** (3D scene) | Medium |
+| **Handles glare/refraction?** | No | Partially (learned) | **Yes** (explicit depth) | Partially |
+| **Extensibility (new format)** | High | Low | High (scene-agnostic) | Medium |
+| **Robustness (lighting)** | Medium | High | High | High |
+| **Robustness (occlusion)** | Medium | Medium | High | High |
+| **Robustness (plate tilt)** | Low | Medium | High | Medium–High |
+| **Development time** | 2–3 weeks | 2–3 weeks | 4–6 weeks | 3–4 weeks |
+| **Maintenance burden** | Low | Medium | High | Medium |
+| **GPU required?** | No | Yes | Yes (strong) | Yes (optional) |
+| **Failure mode** | Cascading (plate → tip) | Overconfident misclassification | Complex (SfM failure) | Degraded (one module) |
+| **2-min budget?** | Yes | **Yes** | No | Yes |
+| **Recommended for production?** | If accuracy <80% | **Yes (primary)** | No (too slow) | If accuracy <88% |
 
 ---
 
 ## Architect's Recommendation
 
-### Primary Recommendation: **Architecture 2 (Deep Learning End-to-End)**
+### Primary Recommendation: **Architecture 2 (Deep Learning with Temporal Modeling)**
 
 **Rationale:**
 
-1. **Best accuracy-to-effort ratio:** With 100 labeled samples available, deep learning should achieve **85–95% accuracy** on held-out set. Classical CV likely plateaus at 80–90%.
+1. **Temporal signals are first-class:** Single-frame models cannot distinguish dispense phases (entering vs. leaving). Temporal models (TimeSformer, SlowFast) identify the dispense event explicitly, aligning with Transfyr's "Tacit Knowledge" mission.
 
-2. **Sample efficiency via transfer learning:** ImageNet pre-trained backbones provide strong initialization. Factorized output (row + column heads) further reduces overfitting risk.
+2. **Best accuracy-to-effort ratio within 2-min budget:** With 100 labeled samples + synthetic data generation, temporal DL should achieve **88–96% accuracy** on held-out set.
 
-3. **Inference speed:** ~300–500ms per sample on GPU is **comfortable within 2-min budget**, enabling real-time testing and iteration.
+3. **Inference speed:** ~0.8–2 sec per sample on GPU is **well within 2-min budget**, enabling iteration.
 
-4. **Robustness to variation:** Augmentation (brightness, rotation, blur) makes model resilient to lighting, plate tilt, and minor camera shifts without manual tuning.
+4. **Robustness to variation:** Augmentation (brightness, rotation, temporal jitter) makes model resilient to lighting, plate tilt, variable dispensing speed without manual tuning.
 
-5. **Extensibility (within format):** Once trained, model works for any camera/lighting setup within same well plate format. No recalibration needed.
+5. **Implementable with Kinetics-400 pre-training:** TimeSformer/SlowFast are trained on large-scale video; transfer learning is strong.
 
-6. **Implementation maturity:** Standard PyTorch pipeline; well-tested techniques (ResNet, multi-label classification, data augmentation).
+6. **Synthetic data generation mandatory:** Red team critique on N=100 overfitting requires generating synthetic dispense events (5–10× augmentation). Strategy 2 in Section 2.5 is non-negotiable.
 
-### Secondary Recommendation: **Hybrid (if Deep Learning underperforms)**
+### Secondary Recommendation: **Hybrid (if DL accuracy stalls <88%)**
 
-If deep learning accuracy stalls <85% on validation, **immediately pivot to Hybrid**:
+If temporal deep learning accuracy plateaus <88% on validation:
 
 1. Implement classical CV module (plate detection + tip localization) in parallel
-2. Train a lightweight fusion network that combines geometric prior + learned features
-3. Hybrid should recover ~5–10% accuracy via geometric constraints
+2. Train a lightweight fusion network that combines geometric prior + temporal features
+3. Hybrid should recover ~5–10% accuracy via geometric constraints while preserving temporal awareness
+
+### Tertiary Recommendation: **Architecture 3 (3DGS) for High-Precision / Glare-dominated Failure**
+
+If error analysis reveals glare/refraction as primary failure mode (>50% of misclassifications):
+
+1. Implement 3D Gaussian Splatting pipeline (4–6 weeks)
+2. Trade 2-min latency for near-perfect accuracy (95–99%)
+3. Use for offline validation or high-stakes assays
+4. **Not** for production throughput; latency is prohibitive (10–60 min per sample)
 
 ### Why NOT Classical CV as primary:
 
+- **Temporal blindness:** Cannot distinguish dispense phases; violates Transfyr's core mission.
 - **Brittleness to calibration:** Camera calibration errors compound through geometric pipeline. Single point of failure: if plate detection fails, entire pipeline fails.
-- **Lighting sensitivity:** Color thresholding requires manual tuning; less generalizable across lighting conditions.
+- **Lighting sensitivity:** Color thresholding requires manual tuning per setup.
 - **Development risk:** More complex pipeline (6–7 steps); higher chance of subtle bugs in geometric mappings.
-- **Data efficiency:** Ignores 100 labeled examples except for validation.
+- **Data waste:** Ignores 100 labeled examples except for validation (no temporal signals extracted).
+
+### Why NOT 3DGS as primary:
+
+- **Latency prohibitive:** 10–60 min per sample far exceeds 2-min budget.
+- **Calibration overhead:** Requires careful camera calibration (1 hour one-time setup).
+- **SfM fragility:** Feature matching can fail on featureless plates.
+- **Overkill for current task:** If Architectures 2/3 meet 88%+ accuracy, 3D reasoning unnecessary.
+- **Status:** Excellent for research validation; production-unviable.
+
+---
+
+## Non-Negotiable Design Constraints (Revised)
+
+### For Architecture 2 (Recommended)
+
+1. **Temporal-aware backbone:** Must use TimeSformer or SlowFast, NOT single-frame models. Temporal modeling is mandatory for this task.
+
+2. **Late Fusion (geometrically correct):** FPV and top-view must be encoded separately (respecting their projection models), then fused via cross-attention. Early fusion explicitly forbidden.
+
+3. **Synthetic data generation:** Must create 5–10× synthetic dispense events to mitigate N=100 overfitting. Strategy 2 (Section 2.5) is non-negotiable.
+
+4. **Kinetics-400 pre-training:** Transfer learning from video (Kinetics) is non-negotiable, not ImageNet.
+
+5. **Dispense event detection:** Output head must explicitly model "when did tip enter well?" (Option B in Section 2.4, Sequence-to-Label). Temporal aggregation (mean/max) is insufficient.
+
+6. **Latency ceiling:** Inference time per sample **must be <10 seconds** (ideally <2 sec) to fit within 2-min budget for 10 samples.
+
+7. **Validation accuracy:** Minimum **88%** on held-out set before production deployment. If <88%, hybrid or 3DGS required.
+
+8. **Generalization:** Model must achieve ≥85% accuracy on well coordinates it did **not** see in training data. Cannot overfit to training wells.
+
+### For Classical CV (if pursued as fallback)
+
+1. **Plate detection robustness:** Must detect plate correctly in ≥95% of frames even with partial occlusion.
+
+2. **Temporal motion tracking:** Optical flow + velocity estimation (Section 1.4) is mandatory for identifying dispense events.
+
+3. **Calibration time:** Initial camera calibration must complete in <1 hour.
+
+4. **Geometric accuracy:** Tip position error <2 pixels in rectified frame (corresponds to ~0.5 mm on plate; acceptable for 4.5 mm well pitch).
+
+### For 3DGS (if used for validation/research)
+
+1. **Scene reconstruction RMSE:** 3D point positions must be accurate to <1 mm (critical for sub-well-pitch accuracy).
+
+2. **Calibration validation:** Reprojection error <1 pixel on all calibration images.
+
+3. **Inference time tolerance:** <60 min per sample acceptable for offline research (not production).
 
 ---
 
@@ -713,61 +1074,137 @@ If deep learning accuracy stalls <85% on validation, **immediately pivot to Hybr
 
 ---
 
-## Implementation Roadmap
+## Implementation Roadmap (Revised)
 
-### Phase 1: Establish baseline (Week 1)
+### Phase 1: Data Preparation & Synthetic Generation (Week 1)
 
 - [ ] Implement data loading & preprocessing pipeline
-- [ ] Implement deep learning Architecture 2 (ResNet-18 + factorized heads)
-- [ ] Implement classical CV Architecture 1 (plate detection + tip detection only, no triangulation)
-- [ ] Evaluate both on validation set (80/20 split of 100 samples)
-- [ ] **Decision gate:** Which architecture meets ≥85% accuracy on validation?
+- [ ] Analyze class balance: which wells appear <3 times?
+- [ ] **Implement synthetic data generation (Stable Video Diffusion or template-based):** Create 5–10× synthetic clips for undersampled wells. Target: 500–1000 synthetic clips total.
+- [ ] Split: 80/20 train/val on (100 real + 500–1000 synthetic) = 600–1100 samples
+- [ ] **Decision gate:** Synthetic data quality acceptable (visual inspection + FID score)?
 
-### Phase 2: Optimize winning architecture (Week 2)
+### Phase 2: Baseline Temporal Model (Week 2)
 
-- [ ] Hyperparameter sweep (learning rate, weight decay, augmentation intensity)
-- [ ] Error analysis: which wells are misclassified? Any systematic bias?
-- [ ] Implement augmentation strategies (if deep learning)
-- [ ] Implement triangulation (if classical CV)
-- [ ] Target: ≥90% on validation
+- [ ] Implement Architecture 2 (TimeSformer backbone + temporal fusion + Sequence-to-Label head)
+- [ ] Kinetics-400 pre-trained initialization (no ImageNet)
+- [ ] Implement training loop: transfer learning + aggressive augmentation (Strategy 1, Section 2.5)
+- [ ] Evaluate on validation set (20 real + 100 synthetic samples)
+- [ ] **Decision gate:** Accuracy ≥88% on validation?
+  - **YES:** Proceed to Phase 3
+  - **NO:** Proceed to Phase 2b (hybrid)
 
-### Phase 3: Integration & deployment (Week 3)
+### Phase 2b (Optional): Hybrid if DL <88%
+
+- [ ] Implement classical CV module (plate detection + optical flow) in parallel
+- [ ] Implement geometric prior fusion (Architecture 5)
+- [ ] Re-evaluate: hybrid accuracy ≥88%?
+
+### Phase 3: Optimization & Error Analysis (Week 3)
+
+- [ ] Hyperparameter sweep: learning rate, weight decay, augmentation intensity, fusion strategy
+- [ ] Error analysis: which wells are misclassified? Any systematic bias (rows/columns)?
+- [ ] Temporal event detection validation: does model learn to identify dispense frame?
+- [ ] Implement confidence calibration (temperature scaling)
+- [ ] Target: ≥92% on validation
+
+### Phase 4: Integration & Testing (Week 4)
 
 - [ ] Integrate with CLI interface
-- [ ] Test on 10 held-out samples
-- [ ] Latency profiling; optimize if needed
+- [ ] Test on 10 held-out real samples (no synthetic data)
+- [ ] Latency profiling; verify <2 sec per sample (GPU)
 - [ ] Package as Docker container
-- [ ] Documentation for deployment
+- [ ] Final documentation + deployment guide
 
-### Phase 4: Fallback / Hybrid (if needed, Week 4)
+### Phase 5: Fallback / Research (If needed, Week 5+)
 
-- [ ] If Phase 2 accuracy <85%, implement Hybrid Architecture 3
-- [ ] Fuse geometric prior + learned features
-- [ ] Target: ≥95% on validation
+- [ ] If Phase 4 test accuracy <88%, implement Hybrid (Architecture 5)
+- [ ] If error dominated by glare/refraction, explore 3DGS (Architecture 3) for research validation
+- [ ] Publish findings on Physical AI for lab automation
 
 ---
 
 ## Technical Debt & Future Work
 
-1. **Temporal models:** If single-frame deep learning plateaus, implement 3D CNN (Option B from 2.1) to leverage motion signals
-2. **Confidence calibration:** Calibrate confidence scores via temperature scaling or Platt scaling for reliable thresholding
-3. **Uncertainty quantification:** Use Monte-Carlo dropout or ensemble methods to estimate prediction uncertainty per well
-4. **Active learning:** With 100 samples, use uncertainty sampling to prioritize which new samples to label next
-5. **Online learning:** Deploy model in production; retrain on new errors to adapt to new pipette types / lighting
+1. **Uncertainty quantification:** Use Monte-Carlo dropout or ensemble methods to estimate per-well confidence; "abstain" when uncertain (red team critique on reproducibility over accuracy).
+
+2. **Active learning:** With 100 samples, use uncertainty sampling to prioritize which new samples to label; iteratively improve dataset coverage.
+
+3. **Temporal event grounding:** Extend output head to predict dispense timestamp (frame index) with confidence; useful for video verification and debugging.
+
+4. **Robustness to plate variation:** Test generalization to different plate formats (384-well, 1536-well) without retraining. Use architectural changes (grid-agnostic decoder) if needed.
+
+5. **Calibration-free 3D:** Explore monocular depth estimation (MiDaS) as lightweight alternative to full 3DGS when glare failures emerge.
+
+6. **Online learning / domain adaptation:** Deploy in production; retrain on misclassified samples to adapt to new pipette types, lighting, or plate materials.
+
+7. **Multimodal fusion:** Integrate acoustic signals (Transfyr captures audio) to cross-validate dispense events. Audio "plink" is higher-fidelity than blurred video.
+
+8. **Edge deployment:** Quantize temporal backbone for NVIDIA Jetson; enable real-time lab deployment instead of cloud inference.
+
+---
+
+## Appendix: Early Fusion is Geometrically Wrong (Rationale for Late Fusion)
+
+**Why early fusion (concatenating FPV and top-view at layer 2) is incorrect:**
+
+```
+FPV image (perspective projection):
+  - Object at depth z=10cm projects to pixel p1
+  - Same object at z=20cm projects to pixel p2 (further from camera)
+  - Depth directly affects pixel position
+
+Top-view image (orthographic projection):
+  - All objects at any depth z project to same pixel p_ortho ≈ (x_world, y_world)
+  - Pixel position ≈ world position (depth-independent)
+
+Early Fusion (pixel-level concat):
+  [FPV_features(p1)] + [TopView_features(p_ortho)]
+  
+  The network tries to align (p1 ≠ p_ortho) from different projection models.
+  This forces the network to learn a non-linear, ad-hoc mapping between
+  perspective and orthographic coordinates—a brittle, low-generalization solution.
+
+Late Fusion (after encoding):
+  FPV_features = Encoder_FPV([FPV_image]) → (f1, f2, ..., f_d)  [in FPV coordinate frame]
+  TopView_features = Encoder_TopView([TopView_image]) → (g1, g2, ..., g_d)  [in world frame]
+  
+  Fused_features = Attention(query=FPV_features, key_value=TopView_features)
+  
+  Each view is encoded in its native coordinate frame; fusion respects geometry.
+```
+
+**Empirical consequence:**
+- Early fusion models memorize specific FPV-TopView pixel alignments from training data
+- Generalization to new camera angles or plate positions fails
+- Late fusion models learn coordinate-frame-agnostic concepts; generalization improves
+
+**Reference:** Multi-view geometry literature (Hartley & Zisserman, 2003) establishes that feature-space fusion respects projection model differences better than pixel-space fusion.
 
 ---
 
 ## Conclusion
 
-**Recommended path:** Deep Learning (Architecture 2) with factorized output heads, ResNet-18 backbone, transfer learning, and aggressive data augmentation. This balances accuracy (85–95%), interpretability (factorized heads are semi-interpretable), and development speed (1–2 weeks).
+**Recommended path:** Architecture 2 (Temporal Deep Learning) with Kinetics-400 pre-training, late fusion, synthetic data generation, and explicit dispense event detection. This balances accuracy (88–96%), temporal semantics (first-class), generalization (unseen wells), and latency (<2 min).
 
-**Fallback path:** Hybrid approach if deep learning <85%. Geometric prior provides safety net.
+**Physical AI commitment:** All architectures explicitly model 3D geometry (projection models, depth, temporal causality) rather than treating the task as 2D image classification.
 
-**Non-negotiable:** Support multi-label output, dual-view fusion, <2-min latency, and ≥85% validation accuracy.
+**Research path (high-precision):** Architecture 3 (3DGS) for offline validation. Demonstrates scientific rigor but unsuitable for production throughput.
+
+**Fallback path:** Hybrid (Architecture 5) if deep learning <88%. Geometric prior provides safety net while preserving temporal awareness.
+
+**Non-negotiable constraints:**
+- Support multi-label output, dual-view fusion, <2-min latency, ≥88% validation accuracy
+- Temporal modeling (no single-frame baselines)
+- Late fusion (geometrically correct)
+- Synthetic data generation (scale beyond N=100)
+- Uncertainty quantification (reproducibility over overconfidence)
 
 Success criteria:
-- [ ] ≥90% accuracy on held-out test set (10 samples)
-- [ ] <10 sec inference per sample (ideally <1 sec)
-- [ ] Reproducible results (git-tracked, seeded)
-- [ ] Generalizes to unseen row/column combinations
+- [ ] ≥88% accuracy on held-out test set (10 real samples)
+- [ ] <2 sec inference per sample on GPU (ideally <1 sec)
+- [ ] ≥85% accuracy on unseen row/column combinations (generalization test)
+- [ ] Explicit dispense event detection (temporal localization)
+- [ ] Reproducible results (git-tracked, seeded, calibrated confidence scores)
+- [ ] Failure mode analysis: glare/occlusion robustness characterized
 
