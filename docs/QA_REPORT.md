@@ -624,7 +624,7 @@ Based on audit + original QA_STRATEGY risks:
 - [ ] JSON schema validation passes for all outputs
 - [ ] Exact-match accuracy ≥80% (or ≥70% if hold-out contains many unseen wells)
 - [ ] Cardinality-wise accuracy ≥75% (separate for 1-well, 8-well, 12-well if sample distribution allows)
-- [ ] Total runtime ≤20 minutes (batch inference for ~10 samples)
+- [ ] Total runtime ≤ 20 minutes (<2 min per dual-view sample for ~10 samples)
 - [ ] No runtime errors, exceptions, or OOM kills
 - [ ] Predictions consistent with visual inspection (sanity check on 3–5 worst predictions)
 

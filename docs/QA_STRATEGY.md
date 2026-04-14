@@ -53,7 +53,7 @@ This project requires a **defense-in-depth** testing strategy due to:
 - [ ] FPV and Top-view clips are synchronized (frame counts, timestamps match)
 - [ ] Feature fusion produces correct tensor dimensions
 - [ ] Model inference produces output for both single-well and multi-well cases
-- [ ] Pipeline executes in 20 min total for ~10 samples on evaluation hardware
+- [ ] Pipeline executes in <2 min per dual-view sample (20 min total for ~10 samples) on evaluation hardware
 - [ ] Error in one view doesn't crash the pipeline (graceful fallback to single view)
 
 #### Layer 3: System Testing
@@ -884,7 +884,7 @@ Before submitting final solution for hold-out evaluation, QA Engineer must verif
     - [ ] Partial dispense: model outputs correct well despite incomplete action ✓
     - [ ] Enter vs exit: model predicts well only once, not twice ✓
 - [ ] **Schema Validation:** `python -m jsonschema validate output.json schema.json` passes for all outputs
-- [ ] **Timeout Regression:** wall-clock time for 10 samples ≤ 20 min (batch inference constraint)
+- [ ] **Timeout Regression:** wall-clock time per dual-view sample < 2 min (20 min total for ~10 samples)
 - [ ] **Memory Profiling:** peak memory during evaluation < 3GB
 - [ ] **Coverage Analysis (NEW):**
   - [ ] Data scientist provides coverage heatmap: which wells appear in training, which are unseen
@@ -1291,7 +1291,7 @@ accuracy_weighted = (
 |-----------|-----------|-------|
 | **Total time for 10 samples** | ≤ 20 minutes | Hard deadline per problem statement |
 | **Per-sample timeout** | ≤ 3 minutes | Any sample exceeding 3 min auto-skipped |
-| **Average per-sample** | ≤ 120 seconds | 20 min total for ~10 samples (batch inference) |
+| **Average per-sample** | ≤ 120 seconds | <2 min per dual-view sample (20 min total for ~10 samples) |
 | **Peak memory usage** | ≤ 3.5 GB | Evaluation hardware typically has 4–8 GB RAM |
 
 **Latency Pass Criteria:**

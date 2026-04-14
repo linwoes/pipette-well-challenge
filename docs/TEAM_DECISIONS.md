@@ -489,7 +489,7 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 - [ ] Cardinality-wise accuracy ≥ 75% (separate scoring for 1/8/12-well operations)
 - [ ] Cross-view agreement > 70% on hold-out samples
 - [ ] False positive rate < 10% (confident wrong predictions are rare)
-- [ ] Total runtime ≤ 20 minutes (batch inference for ~10 samples)
+- [ ] Total runtime ≤ 20 minutes (<2 min per dual-view sample for ~10 samples)
 - [ ] No runtime errors, exceptions, or timeouts
 - [ ] Predictions consistent with visual inspection of videos
 
