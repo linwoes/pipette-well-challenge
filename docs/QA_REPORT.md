@@ -402,26 +402,21 @@ Cross-checked all document pairs for contradictions, gaps, and alignment.
 | Test | Line(s) | Issue | Severity |
 |------|---------|-------|----------|
 | test_well_row_uppercase() | 159–173 | Row format check: expects uppercase (✓ correct) | OK |
-| test_multiwell_cardinality_consistency() | 210–238 | 8-channel should be **same column**, 12-channel same **row** | **CRITICAL BUG** |
+| test_multiwell_cardinality_consistency() | 210–238 | 8-channel → same **column** ✓; 12-channel → same **row** ✓ | **✓ CORRECT** |
 | test_maximum_wells_limit() | 139–157 | Test generates >96 wells but doesn't fail the test; just marks as "invalid" | **LOGIC ERROR** |
 
-**Critical Bug in test_multiwell_cardinality_consistency():**
+**Domain Clarification — 96-well plate channel semantics:**
 
-```python
-# For 8-channel, all wells should be in same column
-columns = set(w["well_column"] for w in output_8channel["wells"])
-assert len(columns) <= 1, "8-channel operation should have all wells in same column"
-```
+A 96-well plate has **8 rows (A–H)** and **12 columns (1–12)**:
 
-**WRONG:** 8-channel operates on a ROW (A1–H1 is one 8-channel operation), not column.
-**CORRECT:** Should be:
-```python
-# For 8-channel, all wells should be in same ROW (8 tips in a row)
-rows = set(w["well_row"] for w in output_8channel["wells"])
-assert len(rows) <= 1, "8-channel operation should have all wells in same row"
-```
+- **8-channel pipette** — 8 tips spaced to match the 8 **rows** → fills one entire **column**.
+  e.g. A1, B1, C1, D1, E1, F1, G1, H1 = all rows of **column 1**.
+- **12-channel pipette** — 12 tips spaced to match the 12 **columns** → fills one entire **row**.
+  e.g. A1, A2, A3 … A12 = all columns of **row A**.
 
-**Severity:** **CRITICAL** – This inverts the 8/12-channel semantics. Tests will incorrectly validate wrong predictions.
+The test assertion `"8-channel operation should have all wells in same column"` is **correct** and must not be changed. This is confirmed by the empirical dataset: column-sweeps contain 8 wells sharing one column value; row-sweeps contain 12 wells sharing one row value.
+
+> ⚠️ **Audit self-correction**: A prior draft of this report incorrectly labelled this test a "CRITICAL BUG" and proposed inverting the column/row assertions. That finding was a domain knowledge error. The test is correct. Issues I16 and R9 (listed below) are hereby **CLOSED — NOT A BUG**.
 
 ---
 
@@ -583,7 +578,7 @@ Based on audit + original QA_STRATEGY risks:
 | R6 | Generalization gap 30 percentage points (from DATA_ANALYSIS) | **HIGH** | **Very High** | 85% training accuracy ≠ 85% test accuracy; expect 55–65% on hold-out | Use aggressive regularization (dropout 0.5, weight decay 1e-5, early stopping) |
 | R7 | Unseen wells (5–15) with zero training samples | **HIGH** | **Very High** | Model cannot predict these; confidence gating essential | Implement confidence threshold per QA_STRATEGY Section 2.4; log unseen wells |
 | R8 | Cardinality prediction incorrect (from QA_STRATEGY 4.1.3) | **HIGH** | **High** | 8-channel or 12-channel operations misclassified (e.g., predict 3 wells instead of 8) | Implement explicit cardinality head or post-processing constraint; validate per TEAM_DECISIONS Decision 3 |
-| R9 | Test bug: 8-channel validation inverted | **HIGH** | **High** | Tests will pass for wrong predictions; hold-out evaluation will fail | Fix test_multiwell_cardinality_consistency() to check row consistency for 8-channel, column for 12-channel |
+| R9 | ~~Test bug: 8-channel validation inverted~~ | ~~HIGH~~ | ~~High~~ | **CLOSED — NOT A BUG.** Test is correct: 8-channel → same column, 12-channel → same row. Prior finding was a domain knowledge error. See Section 2.7. | No action required. |
 | R10 | Frame aggregation strategy ambiguous | **HIGH** | **Medium** | If using different frames (early vs late) for each view, temporal misalignment occurs | Document frame selection in video_loader; extract (early, middle) or (middle, late) pairs consistently |
 
 ### 5.3 Medium-Risk Issues
@@ -619,7 +614,7 @@ Based on audit + original QA_STRATEGY risks:
 | I13 | CRITICAL | src/postprocessing/output_formatter.py | 11–50, 53–73, 76–92, 95–112 | All post-processing functions raise NotImplementedError (4 functions) | Implement: logit_to_wells, enforce_cardinality_constraint, sort_and_deduplicate, validate_wells |
 | I14 | HIGH | src/postprocessing/output_formatter.py | 53–73 | Cardinality constraint tie-breaking unspecified | Use highest average confidence to break ties when multiple rows/columns have equal counts |
 | I15 | MEDIUM | src/utils/metrics.py | 16–192 | All metrics functions are stubs | Implement: exact_match_accuracy, cardinality_accuracy (CRITICAL); per_well_metrics, jaccard_index (MEDIUM) |
-| I16 | CRITICAL | tests/test_output_schema.py | 210–238 | 8-channel/12-channel semantics inverted | Fix: 8-channel should check same ROW (not column); 12-channel checks same COLUMN (not row) |
+| I16 | ~~CRITICAL~~ **CLOSED** | tests/test_output_schema.py | 210–238 | ~~8-channel/12-channel semantics inverted~~ **NOT A BUG — test is correct.** 8-channel → same column ✓; 12-channel → same row ✓. Prior finding was a domain knowledge error. | No action required. |
 | I17 | HIGH | tests/test_output_schema.py | 139–157 | test_maximum_wells_limit assertion logic wrong | Assertion should fail when len(wells) > 96; currently just flags but doesn't fail |
 | I18 | CRITICAL | tests/test_preprocessing.py | 18–197 | All preprocessing tests are placeholders (pass statements) | Implement: test_load_video_valid_file, test_temporal_offset_detection, test_frame_extraction_latency |
 | I19 | CRITICAL | README.md vs others | Output schema | Format inconsistency: well_row/well_column vs row/column | Standardize on `well_row` and `well_column` |
@@ -647,9 +642,10 @@ Based on audit + original QA_STRATEGY risks:
 
 - [ ] **I1–I5:** All CRITICAL implementation gaps closed (inference.py, video_loader.py, model loading)
 - [ ] **I6–I15:** All code stubs implemented (video_loader, backbone, fusion, postprocessing, metrics)
-- [ ] **I16–I17:** Test bugs fixed (cardinality semantics, assertion logic)
+- [x] **I16:** CLOSED — not a bug. 8-channel → same column, 12-channel → same row is correct domain behaviour.
+- [ ] **I17:** Test assertion logic fixed (test_maximum_wells_limit)
 - [ ] **I19–I20:** Documentation reconciled (schema format, fusion architecture decided)
-- [ ] **test_output_schema.py** runs and passes (except I16)
+- [ ] **test_output_schema.py** runs and passes
 - [ ] **Full inference pipeline** tested on 2 local sample videos; batch inference ~2 min per sample average
 - [ ] **Latency profiling** on target hardware (GPU); verify per-sample <1 sec inference
 - [ ] **Edge case spot checks:**
@@ -723,7 +719,7 @@ Based on audit + original QA_STRATEGY risks:
    - test_maximum_wells_limit(): add failing assertion for >96 wells
 
 2. **Implement comprehensive test suite**:
-   - Schema validation (already good; just fix I16)
+   - Schema validation (already correct; I16 closed — 8/12-channel semantics were correct all along)
    - Preprocessing tests (I18)
    - Integration test for full pipeline
    - Edge case spot checks (glare, dark, motion blur simulation)

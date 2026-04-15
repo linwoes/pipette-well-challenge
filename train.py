@@ -405,11 +405,11 @@ class Trainer:
 
         return metrics['val_loss'], metrics
 
-    def train(self):
+    def train(self, start_epoch: int = 0):
         """Main training loop."""
-        logger.info(f"Starting training for {self.epochs} epochs")
+        logger.info(f"Starting training: epochs {start_epoch+1}–{self.epochs}")
 
-        for epoch in range(self.epochs):
+        for epoch in range(start_epoch, self.epochs):
             logger.info(f"\nEpoch {epoch + 1}/{self.epochs}")
 
             # Train
@@ -479,6 +479,8 @@ def main():
     parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
                         help='Backbone architecture (dinov2 or resnet18 for CPU training)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume training from')
 
     args = parser.parse_args()
 
@@ -537,8 +539,20 @@ def main():
         weight_decay=args.weight_decay,
     )
 
-    # Train
-    trainer.train()
+    # Resume from checkpoint if specified
+    start_epoch = 0
+    if args.resume and os.path.exists(args.resume):
+        logger.info(f"Resuming from checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=True)
+        model.load_state_dict(ckpt['model_state_dict'])
+        trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+        trainer.best_val_loss = ckpt['val_loss']
+        start_epoch = ckpt['epoch'] + 1
+        logger.info(f"Resumed at epoch {start_epoch} | best val_loss={ckpt['val_loss']:.4f} | exact_match={ckpt['exact_match']*100:.1f}%")
+
+    # Train (from start_epoch if resuming)
+    trainer.train(start_epoch=start_epoch)
 
     logger.info("Training complete!")
 

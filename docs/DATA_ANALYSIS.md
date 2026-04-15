@@ -45,8 +45,10 @@ With 100 video samples across 96 wells, naive arithmetic suggests ~1.04 samples 
 
 - **Standard pipetting order:** Top-to-bottom (rows A→H), left-to-right (columns 1→12)
 - **Multi-channel operations create correlated wells:**
-  - 8-channel pipettes dispense into full rows (A1-H1, A2-H2, ..., A12-H12) = 12 possible operations
-  - 12-channel pipettes dispense into full columns (A1-A12, B1-B12, ..., H1-H12) = 8 possible operations
+  - **8-channel pipettes** — 8 tips spaced to match the 8 rows → dispense into one full **column** simultaneously.
+    e.g. A1, B1, C1, D1, E1, F1, G1, H1 (column 1). 12 possible column targets.
+  - **12-channel pipettes** — 12 tips spaced to match the 12 columns → dispense into one full **row** simultaneously.
+    e.g. A1, A2, A3 … A12 (row A). 8 possible row targets.
   - Single-channel = 96 individual well operations
 
 ### Estimated Distribution of 100 Samples
