@@ -1,8 +1,100 @@
 # Team Decisions Log: Transfyr AI Pipette Well Challenge (Post-Red Team Review)
 
 **Date:** April 14, 2026 (Revised Post-Red Team)  
+**Updated:** April 15, 2026 (Empirical Data Decisions)  
 **Compiled by:** Cross-functional team (Data Scientist, Architect, ML Scientist, QA Engineer)  
 **Purpose:** Document post-red-team architectural decisions, addressing critical gaps in 100-sample VideoMAE+synthetic-data strategy
+
+---
+
+## Empirical Data Decisions (April 15, 2026)
+
+Based on real dataset analysis (`DATA_ANALYSIS_EMPIRICAL.md`), two new decisions are added to address data-specific implementation:
+
+---
+
+### Decision R-1: Train/Val Split Strategy (Plate-Based)
+
+**Driver:** Data Scientist (empirical analysis)
+
+**Date:** 2026-04-15
+
+**Decision:** Use **plate-based stratification** for train/val split to eliminate data leakage:
+- **Train:** Plates 1, 2, 3, 4, 9 (72 clips)
+- **Validation:** Plates 5, 10 (28 clips)
+
+**Rationale:**
+
+1. **No plate leakage:** Clips from the same physical plate never appear in both train and val. Plates are independent experimental units (different lighting, camera setup, operator handling).
+
+2. **Real-world simulation:** Mirrors production scenario: model trained on past plates, validated on new plates.
+
+3. **Eliminates instrument bias:** Different plates have different lighting, well geometry, camera alignment. Plate-level split prevents learning plate-specific artifacts rather than true well-detection capability.
+
+4. **Natural operation stratification:** Split preserves operation type distribution:
+   - Train: 6 row-sweep, 12 column-sweep, 54 single-well
+   - Val: 7 row-sweep, 0 column-sweep, 21 single-well
+   (Note: Column-sweeps absent from val; mitigate with focal loss or class weighting)
+
+5. **Simplicity:** Whole-plate split is easier to implement than stratified random split and avoids subtle leakage bugs.
+
+**Supersedes:** Random val_split=0.2 currently in train.py (still present as default; plate split requires explicit indices passed to DataLoader)
+
+**Implementation:**
+```python
+# In train.py
+train_plate_indices = [plates[i] for i in [1, 2, 3, 4, 9]]
+val_plate_indices = [plates[i] for i in [5, 10]]
+train_dataset = create_dataset(indices=train_plate_indices)
+val_dataset = create_dataset(indices=val_plate_indices)
+```
+
+**Testing:** Verify no overlap: `set(train_indices) & set(val_indices) == {}`
+
+---
+
+### Decision R-2: well_column String Type Handling
+
+**Driver:** Data Scientist (empirical analysis)
+
+**Date:** 2026-04-15
+
+**Decision:** All code must treat `well_column` as convertible string/int via `int()` conversion:
+- **Labels (source):** Stored as STRING ("1", "2", ..., "12")
+- **Model output:** Integers (1-12)
+- **Validation:** `output_formatter.validate_output()` must handle both string and int inputs
+
+**Rationale:**
+
+1. **Schema mismatch reality:** JSON labels use string values ("1"), but model outputs integer logits (1-12). Conversion must happen somewhere.
+
+2. **Code locations affected:**
+   - `train.py` `_encode_wells()`: Parse labels, convert `well_column` to int for indexing
+   - `output_formatter.py` `logits_to_wells()`: Already uses `int(w['well_column']) - 1`; ensure backward compatible
+   - `output_formatter.py` `validate_output()`: Must accept both string and int columns when comparing ground truth to predictions
+
+3. **Robustness:** Explicit type coercion avoids silent failures from type mismatches.
+
+**Implementation Examples:**
+
+```python
+# Safe parsing (handles both "1" and 1)
+col_value = label['well_column']  # Could be "1" or 1
+col_int = int(col_value)  # Converts both "1" and 1 to integer 1
+col_index = col_int - 1   # Converts to 0-based index (0-11)
+
+# In validation
+def validate_output(prediction, ground_truth):
+    pred_col = int(prediction['well_column'])
+    gt_col = int(ground_truth['well_column'])
+    return pred_col == gt_col
+```
+
+**Testing:** Add assertion in data loading:
+```python
+assert isinstance(col, str) and col.isdigit(), \
+    f"well_column must be numeric string; got {col}"
+```
 
 ---
 

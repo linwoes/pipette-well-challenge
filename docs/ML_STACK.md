@@ -40,17 +40,43 @@ This document provides a **revised, director-grade ML stack recommendation** for
 
 ---
 
+## § Empirical Data Findings
+
+**CRITICAL CORRECTION:** Pre-analysis predictions were overly pessimistic about well coverage and class imbalance. Empirical analysis of the actual 100-clip dataset reveals:
+
+| Property | Theoretical Prediction | Empirical Reality |
+|---|---|---|
+| **Well coverage** | 5–15 wells missing | All 96 covered ✓ |
+| **Class imbalance** | Up to 50× | 6× (max 6, min 1) |
+| **Missing wells** | Likely | None |
+| **Avg wells/clip** | ~5.1 (mixed) | 1 (75%), 8 (12%), 12 (13%) |
+| **Video resolution** | Unknown | 1920×1080 @ 30fps |
+| **Clip duration** | Unknown | ~2.4s (~72 frames) |
+| **well_column type** | Assumed int | String (e.g. "1") ✓ Fixed in pipeline |
+
+**Key Takeaways:**
+1. **All 96 wells represented:** Complete coverage validates generalization potential (no zero-shot wells during validation)
+2. **6× imbalance (not 50×):** Focal loss remains justified, but training dynamics are milder than predicted
+3. **Consistent operation split:** 75% single-well, 13% row-sweeps, 12% column-sweeps mirrors real-world pipetting patterns
+4. **Stable video format:** All clips are 1920×1080 @ 30fps (~72 frames, ~2.4s); no encoding artifacts
+
+See `docs/DATA_ANALYSIS_EMPIRICAL.md` for full statistical breakdown, well coverage heatmap, and training split recommendations.
+
+---
+
 ## Part 1: Foundation — Addressing the N=100 Overfitting Crisis
 
 ### 1.1 The Problem: 100 Samples is a Data Desert
 
-**Reality Check:**
-- 96-well plate with only 100 physical samples → extreme class imbalance
-- Some wells have 0–2 samples; naïve fine-tuning will memorize lighting, background, and video artifacts
+**Reality Check (Empirical):**
+- 96-well plate with only 100 physical samples → moderate class imbalance (6× ratio, not extreme)
+- **All 96 wells are represented** (min 1 sample, mean 3.41, max 6) — zero missing wells
 - Validation set: ~10 samples (too small for reliable threshold tuning)
-- **Outcome:** Off-the-shelf fine-tuning on large models will fail catastrophically in production on unseen wells
+- **Outcome:** Off-the-shelf fine-tuning on large models risks memorizing lighting and background despite full well coverage
 
 **Red Team Verdict:** "For a Physical AI company, relying on 100 physical samples is a failure of scale."
+
+**Empirical Correction:** While the N=100 problem remains serious for training robust models, the actual well coverage is complete (not sparse). Imbalance is 6× (manageable with focal loss), not 50× worst-case. This supports the synthetic data and foundation model strategy, but validates that the real dataset is well-constructed.
 
 ### 1.2 Synthetic Data Strategy: From 100 to 10,000+ Samples
 

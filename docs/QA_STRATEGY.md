@@ -21,6 +21,34 @@ This QA Strategy defines a rigorous testing and validation approach for the Tran
 
 ---
 
+## § Real Dataset Validation Findings
+
+**Empirical Result (April 15, 2026):** Comprehensive analysis of the actual dataset (`DATA_ANALYSIS_EMPIRICAL.md`) has confirmed that **all 96 wells are present in the dataset**. The theoretical risk of 5-15 missing wells has been **ELIMINATED**.
+
+### Key Empirical Facts
+
+- **All 96 wells covered**: 100% well coverage (no missing wells)
+- **Class imbalance**: 6× imbalance (max 6, min 1 occurrence per well) — significantly better than theoretical 50× worst-case
+- **Mean well frequency**: 3.41 occurrences per well
+- **Low-frequency wells**: 6 wells with only 1 training sample (C1, C2, C9, C10, C11, C12) — these remain **HIGH risk** for prediction bias
+- **Well column type**: Stored as **STRING** in labels.json ("1", "2", ..., "12") — code must handle `int()` conversion
+
+### Revised Hold-Out Risk Profile
+
+Since all wells are in training data, the primary hold-out risk **shifts from "unseen wells" to "unseen plates" and "low-frequency wells"**:
+
+1. **Unseen wells**: **LOW probability** — model has encountered every well at least once
+2. **Low-frequency wells (n=1)**: **HIGH probability** — model may overfit to limited examples; validation must track per-well accuracy
+3. **Unseen plate combinations**: **HIGH probability** — 7 plates with uneven distribution; hold-out may contain clips from plates not fully represented in training
+
+### Revised Acceptance Criteria
+
+- **well_column type handling**: Code must accept both string and integer inputs via `int()` conversion
+- **Train/val leakage**: **Critical edge case** — clips from same physical plate in both train and val invalidates generalization metrics (see Decision R-1 in TEAM_DECISIONS.md for plate-based split strategy)
+- **Low-frequency well accuracy**: Track separately; wells with n≤2 training samples may have >30% error rate
+
+---
+
 ## 1. QA Strategy Overview
 
 ### 1.1 Testing Philosophy
@@ -82,20 +110,22 @@ This project requires a **defense-in-depth** testing strategy due to:
 
 ## 2. Hold-Out Set Analysis
 
-### 2.1 Class Imbalance Risk: Hold-Out Containing Unseen Wells
+### 2.1 Class Imbalance Risk: Hold-Out Containing Low-Frequency Wells
 
-**Given:**
+**Given (Empirical):**
 - 96 total wells on plate
 - 100 training samples
-- Each sample may cover 1–12 wells
-- Assume uniform distribution: ~100–1200 well instances in training
+- **All 96 wells are covered in training** (no unseen wells)
+- Well frequency: min 1, max 6 occurrences; mean 3.41
+- **6 wells with only 1 training sample** (C1, C2, C9, C10, C11, C12)
 
-**Probability Calculation:**
+**Revised Risk Assessment:**
 
-Conservative estimate: Assume each training sample covers **2 wells on average** (accounting for some multi-channel operations).
-- Training well instances: ~200
-- Unique wells covered: Statistical model suggests 40–60 wells have at least one training instance
-- **Unseen wells in training:** 36–56 wells (37.5–58% of plate)
+The primary class imbalance risk is no longer **unseen wells**, but rather **under-trained wells** with very few samples:
+
+- **Wells with n=1 sample**: 6 wells — risk of overfitting or inability to generalize
+- **Wells with n=2-3 samples**: ~40 wells — higher variance in learned features
+- **Wells with n≥4 samples**: ~50 wells — more stable training
 
 **Hold-out set risk (10 samples):**
 - If each hold-out sample covers 2 wells: ~20 well predictions

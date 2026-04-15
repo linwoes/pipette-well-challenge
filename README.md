@@ -9,9 +9,9 @@
 
 This project implements an automated well detection system for microplate-based liquid handling. Given synchronized dual-view video (first-person view from the pipette operator + bird's-eye top-view of the plate), the system predicts which of the 96 wells (8 rows × 12 columns, labeled A1–H12) are being dispensed into. The solution supports multi-well predictions (1-channel single wells, 8-channel row operations, 12-channel column operations).
 
-**Recommended Architecture:** Deep Learning End-to-End (PyTorch + ResNet-18) with factorized row/column output heads, transfer learning from ImageNet, and focal loss for handling severe class imbalance.
+**Recommended Architecture:** Deep Learning End-to-End (PyTorch + DINOv2-ViT-B/14 + LoRA) with temporal transformer, factorized row/column output heads, and focal loss for handling class imbalance. See ML_STACK.md for full justification. (Sandbox uses ResNet-18 from random init due to proxy constraints; production should use DINOv2.)
 
-**Expected Performance:** 80–90% exact-match accuracy on held-out validation set.
+**Expected Performance:** 70–80% exact-match accuracy on held-out validation set (with calibration-first approach prioritizing confidence scores).
 
 ---
 
@@ -55,9 +55,10 @@ JSON array of predicted wells:
 
 - **Training data:** 100 labeled video pairs (small dataset → high overfitting risk)
 - **Inference budget:** ~2 minutes per dual-view sample
-- **Class imbalance:** 96 wells, 100 samples → extreme long-tail distribution
+- **Class imbalance:** 6× imbalance (max 6, min 1 well occurrence) — moderate, manageable with focal loss
 - **Multi-label complexity:** 1, 8, or 12 wells per video (not single-label classification)
 - **Temporal alignment:** FPV and top-view asynchronous → requires explicit synchronization
+- **Well coverage:** All 96 wells represented in empirical dataset — validates model generalization potential
 
 ---
 
@@ -303,24 +304,13 @@ See `docs/ML_STACK.md` for complete technical specification including code examp
 
 ## Data Analysis & Insights
 
-### Dataset Characteristics (100 samples)
-
-**Well coverage distribution:**
-- Standard pipetting order (row → column sweep) creates non-uniform sampling
-- Multi-channel operations (8-channel: full rows, 12-channel: full columns) cause correlation
-- **Estimated coverage:** 40–60 unique wells have training examples
-- **Estimated gap:** 5–15 wells have zero training samples
-
-**Class imbalance magnitude:**
-- Most frequent wells (corners, edges): 5–10 samples each
-- Least frequent wells (isolated interior): 0–2 samples each
-- **Imbalance ratio:** 10:1 to 50:1 worst case
-
-**Multi-label structure:**
-- Single-channel: ~35 samples (1 well per sample)
-- 8-channel rows: ~40 samples (8 wells per sample)
-- 12-channel columns: ~20 samples (12 wells per sample)
-- Total well-instances: ~610 (but only ~100 unique training samples)
+### Real Dataset Statistics (Empirical)
+- **100 clips** across 7 plates (Plate_1–5, Plate_9–10)
+- **All 96 wells covered** — mean 3.41 samples/well, 6× imbalance (max 6, min 1)
+- **Operation types**: 75% single-well, 13% 12-well row-sweeps, 12% 8-well column-sweeps
+- **Video format**: 1920×1080 @ 30fps, ~2.4s duration (~72 frames)
+- **Label schema**: `well_column` is stored as a string (handled automatically in pipeline)
+- See [`docs/DATA_ANALYSIS_EMPIRICAL.md`](docs/DATA_ANALYSIS_EMPIRICAL.md) for the full analysis
 
 ### View-Specific Strengths
 
@@ -412,7 +402,7 @@ pipette-well-challenge/
 ├── docs/
 │   ├── DATA_ANALYSIS.md                ← Data Scientist's analysis (96 well coverage, class imbalance, view strengths/weaknesses)
 │   ├── ARCHITECTURE.md                 ← Architect's proposals (3 approaches: CV, DL, Hybrid)
-│   ├── ML_STACK.md                     ← ML Scientist's stack recommendation (PyTorch, ResNet-18, focal loss details)
+│   ├── ML_STACK.md                     ← ML Scientist's stack recommendation (PyTorch, DINOv2, focal loss details)
 │   ├── QA_STRATEGY.md                  ← QA strategy (testing, edge cases, failure modes, acceptance criteria)
 │   └── TEAM_DECISIONS.md               ← Cross-team decisions log (architecture choice, loss function, evaluation metrics)
 │
@@ -423,7 +413,7 @@ pipette-well-challenge/
 │   │   └── video_loader.py             ← Frame extraction, FPV+top-view synchronization
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── backbone.py                 ← ResNet-18 backbone definition
+│   │   ├── backbone.py                 ← DINOv2/ResNet-18 backbone definition (see Model Training section)
 │   │   └── fusion.py                   ← Dual-view feature fusion logic
 │   ├── postprocessing/
 │   │   ├── __init__.py
@@ -445,7 +435,8 @@ pipette-well-challenge/
 ## Documentation
 
 ### For Data Scientists
-- **START HERE:** `docs/DATA_ANALYSIS.md`
+- **START HERE:** `docs/DATA_ANALYSIS_EMPIRICAL.md` (real findings from actual dataset)
+- **REFERENCE:** `docs/DATA_ANALYSIS.md` (pre-analysis predictions and strategy)
 - Covers: Class imbalance analysis, coverage gaps, view-specific signals, augmentation strategy
 - Includes: Statistical concerns, overfitting risk, generalization bounds, per-well metrics
 
@@ -457,8 +448,9 @@ pipette-well-challenge/
 
 ### For ML Scientists
 - **START HERE:** `docs/ML_STACK.md`
-- Covers: Framework selection (PyTorch), backbone (ResNet-18), loss function (focal loss), training strategy
+- Covers: Framework selection (PyTorch), backbone (DINOv2-ViT-B/14 + LoRA for production; ResNet-18 for sandbox), loss function (focal loss), training strategy
 - Includes: Code examples, hyperparameter tuning, mixed precision training, inference SLA validation
+- Key: See "Why Not ResNet" section for detailed architectural justification
 
 ### For QA Engineers
 - **START HERE:** `docs/QA_STRATEGY.md`
@@ -474,8 +466,12 @@ pipette-well-challenge/
 
 The `inference.py` file contains a placeholder skeleton for the inference CLI. To implement full training:
 
+**Note on Backbone Selection:**
+The sandbox environment uses ResNet-18 from random initialization due to proxy restrictions preventing DINOv2/VideoMAE weight downloads. In production, use DINOv2-ViT-B/14 + LoRA fine-tuning as specified in `docs/ML_STACK.md` for spatial grounding. See ML_STACK.md "Why Not ResNet" section for detailed justification.
+
 1. **Implement `src/models/backbone.py`:**
-   - Load ResNet-18 from torchvision
+   - For sandbox: Load ResNet-18 from torchvision (random initialization)
+   - For production: Use DINOv2-ViT-B/14 with LoRA adapters
    - Freeze early layers initially
    - Unfreeze layer2+ for fine-tuning
 
@@ -628,7 +624,7 @@ The red team identified 5 critical gaps in the original ResNet-18 single-frame a
 
 - **Data Scientist:** Class imbalance analysis, view-specific signal characterization, augmentation strategy, generalization bounds estimation
 - **Architect:** Architecture proposals (CV vs. DL vs. Hybrid), latency/cost analysis, implementation roadmap
-- **ML Scientist:** Stack recommendation (PyTorch, ResNet-18, focal loss), training strategy, hyperparameter tuning
+- **ML Scientist:** Stack recommendation (PyTorch, DINOv2, focal loss), training strategy, hyperparameter tuning
 - **QA Engineer:** Testing strategy, edge case catalogue, failure mode analysis, acceptance criteria
 
 ---

@@ -1,9 +1,55 @@
 # QA Report: Pipette Well Challenge - Formal Audit
 
-**Date:** April 14, 2026  
+**Date:** April 14, 2026 (Updated April 15, 2026 with Empirical Data Audit)  
 **Auditor:** QA Engineer  
 **Project:** Transfyr AI Pipette Well Challenge  
 **Status:** AMBER – Issues identified, project ready for mitigation
+
+---
+
+## Real Data Audit Results (April 15, 2026)
+
+**Status Update:** Empirical analysis from `DATA_ANALYSIS_EMPIRICAL.md` has superseded theoretical gap analysis. Key findings:
+
+### Closed Issues (Empirical Validation)
+
+**I-THEORY-01:** "5-15 wells may have zero training samples"  
+**Status:** ✓ CLOSED  
+**Finding:** All 96 wells are present in the dataset. Zero missing wells. Zero-shot well prediction risk is **ELIMINATED**.
+
+**I-THEORY-02:** "50× class imbalance (worst case)"  
+**Status:** ✓ REVISED  
+**Finding:** Actual imbalance is 6× (max 6, min 1 occurrence per well). Mean frequency 3.41. Imbalance is **moderate, manageable**.
+
+### New Issues Found (Data Quality)
+
+**I-DATA-01 (HIGH):** `well_column` stored as STRING in labels.json  
+**Status:** ✓ FIXED in code  
+**Evidence:** All column values are strings ("1" through "12"), not integers.  
+**Action:** Code must handle `int()` conversion. Affected: `train.py` `_encode_wells()`, `output_formatter.py` validation functions.
+
+**I-DATA-02 (MEDIUM):** Plate_1 has only 6 clips  
+**Status:** NOTED  
+**Impact:** Plate_1 is all row-sweep operations. Underrepresentation may bias toward single-well.  
+**Mitigation:** Plate-based split (Decision R-1) prevents mixing Plate_1 across train/val.
+
+**I-DATA-03 (MEDIUM):** Plate_9 has 23 clips (23% of training data, single-well heavy)  
+**Status:** NOTED  
+**Impact:** Heavy single-well bias if Plate_9 in training.  
+**Mitigation:** Plate-based stratification controls distribution.
+
+**I-DATA-04 (LOW):** Training from random init (proxy blocks pretrained weights)  
+**Status:** NOTED  
+**Action:** Production training must download pretrained DINOv2/ResNet weights before training.
+
+### Project Health: Upgraded ORANGE → AMBER
+
+**Reasoning:**
+- All 96 wells covered (no blind spots)
+- 6× imbalance is manageable vs. theoretical 50×
+- `well_column` string type already handled in code
+- Empirical split recommendation provided (Plates 1-4,9 for train; 5,10 for val)
+- Data quality excellent (perfect FPV/Topview sync, consistent 1920×1080 @ 30fps)
 
 ---
 

@@ -8,6 +8,35 @@
 
 ---
 
+## § Empirical Correction Notice
+
+*This document contains theoretical analysis produced before the real dataset was available. The findings below have been validated or corrected against the actual data. See `DATA_ANALYSIS_EMPIRICAL.md` for the full empirical report.*
+
+### Theoretical vs. Empirical Findings
+
+| Theoretical Claim | Empirical Reality | Status |
+|---|---|---|
+| "5-15 wells may have zero samples" | All 96 wells covered | ❌ WRONG |
+| "50× class imbalance worst case" | 6× actual imbalance | ⚠️ REVISED |
+| "well_column likely integer" | well_column is a STRING | ❌ WRONG |
+| "~1 sample per well average" | 3.41 mean, min 1 | ✓ CLOSE |
+| "Significant coverage gaps" | No gaps — all 96 covered | ❌ WRONG |
+| "Operation type unknown" | 75% single, 13% row, 12% col | ✓ CONFIRMED |
+| "FPV and Topview synchronized" | All pairs match perfectly | ✓ CONFIRMED |
+| "Video quality concerns" | Consistent 1920×1080 @ 30fps | ✓ CONFIRMED |
+
+### Key Corrections
+
+1. **Well Coverage:** ALL 96 wells are present. The estimated 5-15 missing wells (Section 1.1, original estimate) is **completely wrong**. This is actually excellent for generalization.
+
+2. **Class Imbalance:** Actual 6× imbalance (max 6, min 1) is significantly better than theoretical 50× worst-case. Standard weighted loss or focal loss should suffice; no extreme rebalancing needed.
+
+3. **Data Type:** `well_column` in labels.json is stored as STRING, not integer. Code correctly uses `int()` conversion in `output_formatter.py`, but this constraint should be documented.
+
+4. **Plate Distribution:** 7 plates (Plates 1-5, 9-10) with uneven distribution. Plates 9 and 10 are heavily represented (23 and 21 clips). Plate-based train/val split is **strongly recommended** (see Decision R-1, TEAM_DECISIONS.md).
+
+---
+
 ## 1. Distribution Analysis & Class Imbalance
 
 ### Expected Well Coverage
