@@ -5,13 +5,21 @@ Implements:
   - TemporalAttention: Transformer over ordered frames per view
   - DualViewFusion: Complete model with shared backbone and dual-view fusion
   - WellDetectionLoss: Combined focal loss for row and column heads
+
+ARCHITECTURE FIX (April 2026):
+  - Added img_size parameter to DualViewFusion.__init__()
+  - Validates DINOv2 resolution alignment (multiples of 14) in __init__
+  - Auto-snaps invalid sizes and logs warning. Supported: 224, 336, 448, 518.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import logging
 from typing import Tuple, Optional
 from .backbone import DINOv2Backbone
+
+_logger = logging.getLogger(__name__)
 
 
 class TemporalAttention(nn.Module):
@@ -124,6 +132,7 @@ class DualViewFusion(nn.Module):
         output_dim: int = 256,
         dropout: float = 0.3,
         max_frames: int = 8,
+        img_size: int = 224,
         use_dinov2: bool = True,
     ):
         """
@@ -142,6 +151,7 @@ class DualViewFusion(nn.Module):
             output_dim: Output dimension before heads (default 256)
             dropout: Dropout rate (default 0.3)
             max_frames: Maximum frame sequence length (default 8)
+            img_size: Input image size (default 224). For DINOv2, must be multiple of 14.
             use_dinov2: Use DINOv2 backbone if True, ResNet18 if False (default True)
         """
         super().__init__()
@@ -151,6 +161,19 @@ class DualViewFusion(nn.Module):
         self.shared_backbone = shared_backbone
         self.temporal_dim = temporal_dim
         self.use_dinov2 = use_dinov2
+
+        # Validate DINOv2 resolution alignment
+        if use_dinov2:
+            from .backbone import DINOV2_PATCH_SIZE
+            from src.preprocessing.video_loader import snap_to_dinov2_resolution
+            snapped = snap_to_dinov2_resolution(img_size)
+            if snapped != img_size:
+                _logger.warning(
+                    f"img_size={img_size} adjusted to {snapped} for DINOv2 patch alignment."
+                )
+            self.img_size = snapped
+        else:
+            self.img_size = img_size
 
         # Initialize backbones
         if use_dinov2:

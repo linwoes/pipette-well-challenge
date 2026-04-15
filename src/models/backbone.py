@@ -5,6 +5,14 @@ Implements:
   - DINOv2Backbone: DINOv2-ViT-B/14 with optional LoRA fine-tuning
   - LegacyResNet18Backbone: Fallback ResNet-18 backbone
   - LoRA adapter injection into attention layers
+
+ARCHITECTURE FIX (April 2026):
+  - Added DINOV2_PATCH_SIZE=14 and DINOV2_VALID_RESOLUTIONS validation constants
+  - Added validate_dinov2_input() to guard against incompatible input resolutions
+  - DINOv2 ViT-B/14 requires H,W to be multiples of 14. Invalid resolutions cause
+    incorrect patch embeddings. Supported: 224 (16x16), 336 (24x24), 448 (32x32),
+    518 (37x37 — Meta-recommended for best spatial fidelity, 5x more patches).
+  - validate_dinov2_input() called as first line in forward() to fail fast.
 """
 
 import logging
@@ -15,6 +23,28 @@ import warnings
 from typing import Optional, Dict, Any
 
 _logger = logging.getLogger(__name__)
+
+# DINOv2 ViT-B/14 patch size — all input dimensions must be multiples of this
+DINOV2_PATCH_SIZE = 14
+# Supported aligned resolutions (H=W). 518 is Meta's recommended; 224 is minimum valid.
+DINOV2_VALID_RESOLUTIONS = (224, 336, 448, 518)
+
+def validate_dinov2_input(x: torch.Tensor, patch_size: int = DINOV2_PATCH_SIZE) -> None:
+    """
+    Validate that input tensor spatial dimensions are multiples of patch_size.
+    Raises ValueError with a clear remediation message if not.
+    """
+    _, _, H, W = x.shape
+    if H % patch_size != 0 or W % patch_size != 0:
+        valid = [r for r in DINOV2_VALID_RESOLUTIONS]
+        raise ValueError(
+            f"DINOv2 ViT-B/14 requires input H and W to be multiples of "
+            f"patch_size={patch_size}. Got ({H}×{W}). "
+            f"Use one of: {valid}. "
+            f"Recommended: 518×518 (37×37 patches, best spatial resolution). "
+            f"Minimum: 224×224 (16×16 patches). "
+            f"Fix: pass img_size=518 or img_size=224 to PipetteWellDataset."
+        )
 
 
 class LoRAAdapter(nn.Module):
@@ -246,6 +276,10 @@ class DINOv2Backbone(nn.Module):
         Returns:
             features: (B, 768) CLS token features
         """
+        # Validate DINOv2 input resolution alignment (must be multiples of 14)
+        if not self.use_fallback:
+            validate_dinov2_input(x)
+
         if self.use_fallback:
             # Use ResNet18 fallback
             from torchvision.models import resnet18

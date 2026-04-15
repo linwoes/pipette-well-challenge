@@ -5,6 +5,8 @@
 model:
   backbone: "resnet18"
   pretrained: true
+  # DINOv2 ViT-B/14: must be multiple of patch_size=14
+  # Valid: 224 (16×14, minimum), 336 (24×14), 448 (32×14), 518 (37×14, recommended)
   input_size: [224, 224]
   num_rows: 8  # Rows A-H
   num_columns: 12  # Columns 1-12

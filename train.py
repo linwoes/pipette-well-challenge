@@ -8,6 +8,11 @@ Trains DINOv2-ViT-B/14 backbone with LoRA adapters on pipette well detection tas
 Usage:
   python train.py --data_dir ./data --labels labels.json --epochs 50 --output checkpoints/
   python train.py --data_dir ./data --labels labels.json --val_split 0.2 --batch_size 4 --device cuda:0
+
+ARCHITECTURE FIX (April 2026):
+  - Added img_size validation in PipetteWellDataset.__init__()
+  - Auto-snaps invalid sizes to DINOv2-compatible resolutions (multiples of 14)
+  - Supported: 224 (16×14, minimum), 336 (24×14), 448 (32×14), 518 (37×14, recommended).
 """
 
 import argparse
@@ -101,6 +106,13 @@ class PipetteWellDataset(Dataset):
         self.num_frames = num_frames
         self.img_size = img_size
         self.augment = augment and HAS_ALBUMENTATIONS
+
+        # Validate DINOv2 patch alignment
+        from src.preprocessing.video_loader import snap_to_dinov2_resolution
+        snapped = snap_to_dinov2_resolution(img_size)
+        if snapped != img_size:
+            logger.warning(f"img_size={img_size} → snapped to {snapped} for DINOv2 alignment")
+            self.img_size = snapped
 
         # Load labels
         with open(labels_path, 'r') as f:

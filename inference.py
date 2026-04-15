@@ -11,6 +11,11 @@ Usage:
   python inference.py --fpv fpv.mp4 --topview top.mp4  # writes to stdout if no --output
   python inference.py --fpv fpv.mp4 --topview top.mp4 --model checkpoints/best.pt --threshold 0.4
 
+ARCHITECTURE FIX (April 2026):
+  - Updated config defaults to document DINOv2 patch-size constraint
+  - img_size must be multiple of 14. Supported: 224 (min), 336, 448, 518 (recommended).
+  - Config now defaults to 224 with warning; users should use 518 for best accuracy.
+
 Author: ML Team
 Date: April 2026
 """
@@ -131,6 +136,8 @@ class PipetteWellDetector:
         return {
             'model': {
                 'backbone': 'dinov2',
+                # DINOv2 ViT-B/14: img_size must be multiple of 14. Options: 224, 336, 448, 518.
+                # 518 recommended (37×37 patches); 224 is minimum valid (16×16 patches).
                 'input_size': [224, 224],
                 'num_rows': 8,
                 'num_columns': 12,

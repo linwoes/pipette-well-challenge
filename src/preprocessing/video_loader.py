@@ -5,10 +5,19 @@ Implements:
   - load_video(): Load video frames using cv2.VideoCapture
   - align_clips(): Align FPV and top-view frames by truncation
   - preprocess_frame(): Resize, normalize, convert BGR→RGB
+  - snap_to_dinov2_resolution(): Round up to nearest DINOv2-compatible resolution
+
+ARCHITECTURE FIX (April 2026):
+  - Added snap_to_dinov2_resolution() to enforce patch-size alignment
+  - DINOv2 ViT-B/14 requires img_size to be multiple of 14 (patch_size).
+  - Automatically snaps invalid sizes to valid multiples with a warning.
+  - Preferred: 224, 336, 448, 518. Use 518×518 for best spatial resolution.
 """
 
 import cv2
 import numpy as np
+import logging
+import math
 from typing import Tuple
 
 
@@ -76,9 +85,43 @@ def align_clips(fpv_frames: np.ndarray, topview_frames: np.ndarray) -> Tuple[np.
     return fpv_frames[:min_len], topview_frames[:min_len]
 
 
+def snap_to_dinov2_resolution(size: int, patch_size: int = 14) -> int:
+    """
+    Round size UP to the nearest multiple of patch_size.
+
+    DINOv2 ViT-B/14 requires all spatial dimensions to be multiples of 14.
+    Preferred values: 224 (16×14), 336 (24×14), 448 (32×14), 518 (37×14).
+    518 is Meta's recommended resolution for best spatial fidelity.
+
+    Args:
+        size: Requested image size
+        patch_size: DINOv2 patch size (default 14)
+
+    Returns:
+        Nearest valid size >= requested size
+
+    Examples:
+        snap_to_dinov2_resolution(224) -> 224  (already valid)
+        snap_to_dinov2_resolution(256) -> 266  (next multiple of 14)
+        snap_to_dinov2_resolution(518) -> 518  (already valid)
+    """
+    snapped = math.ceil(size / patch_size) * patch_size
+    if snapped != size:
+        logging.getLogger(__name__).warning(
+            f"img_size={size} is not a multiple of DINOv2 patch_size={patch_size}. "
+            f"Snapping to {snapped}. Use 224 or 518 to avoid this adjustment."
+        )
+    return snapped
+
+
 def preprocess_frame(frame: np.ndarray, size: Tuple[int, int] = (224, 224)) -> np.ndarray:
     """
     Preprocess frame: resize, normalize to [0, 1], ensure RGB.
+
+    Note: When using DINOv2 backbone, both dimensions must be multiples of 14
+    (the ViT-B/14 patch size). Valid sizes: 224 (16×14), 336, 448, 518 (37×14).
+    518×518 is recommended for best spatial resolution (37×37=1369 patches vs
+    224×224's 16×16=256 patches). Use snap_to_dinov2_resolution() to auto-correct.
 
     Args:
         frame: Input frame (H, W, 3) in RGB format
