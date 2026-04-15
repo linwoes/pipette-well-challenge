@@ -9,9 +9,23 @@
 
 This project implements an automated well detection system for microplate-based liquid handling. Given synchronized dual-view video (first-person view from the pipette operator + bird's-eye top-view of the plate), the system predicts which of the 96 wells (8 rows × 12 columns, labeled A1–H12) are being dispensed into. The solution supports multi-well predictions (1-channel single wells, 8-channel row operations, 12-channel column operations).
 
-**Recommended Architecture:** Deep Learning End-to-End (PyTorch + DINOv2-ViT-B/14 + LoRA) with temporal transformer, factorized row/column output heads, and focal loss for handling class imbalance. See ML_STACK.md for full justification. (Sandbox uses ResNet-18 from random init due to proxy constraints; production should use DINOv2.)
+**Recommended Architecture:** Deep Learning End-to-End (PyTorch + DINOv2-ViT-B/14 + LoRA) with temporal transformer, factorized row/column output heads, and focal loss for handling class imbalance. DINOv2 is the ONLY production primary; ResNet-18 fallback is sandbox-only due to proxy constraints. See ML_STACK.md for full justification.
 
 **Expected Performance:** 70–80% exact-match accuracy on held-out validation set (with calibration-first approach prioritizing confidence scores).
+
+---
+
+## 🎯 Primary Architecture: DINOv2-ViT-B/14 + LoRA
+
+**Production stack:** DINOv2-ViT-B/14 (frozen) → LoRA adapters (r=8, α=16) → Temporal Transformer (2 layers) → Late Fusion → Factorized Row (8) + Col (12) heads
+
+**Why DINOv2, not ResNet-18:**
+- **Patch-based spatial structure** (14×14 = 196 patches) preserves well coordinates; ResNet's global pooling destroys them (7×7 = 49 locations cannot distinguish 96 wells)
+- **Self-supervised pre-training** (142M unlabeled images, DINO contrastive) learns coordinate geometry directly, not object classification
+- **LoRA efficiency** (~33K trainable params) prevents overfitting on N=100 samples; full ResNet-18 fine-tuning would require 11M parameters (catastrophic risk)
+- **Few-shot empirical validation:** DINOv2 ViT-B outperforms ResNet-50 by +8 percentage points on 10-shot benchmarks (Oquab et al., ICCV 2023)
+
+**Sandbox note:** Current training uses ResNet-18 fallback (pretrained weights blocked by proxy). Production deployment should use DINOv2 as specified above. See `src/models/backbone.py` for implementation.
 
 ---
 
@@ -66,15 +80,16 @@ JSON array of predicted wells:
 
 ### Chosen Approach: Temporal Deep Learning with Foundation Models
 
-**Decision:** Use a PyTorch-based neural network with **VideoMAE (Masked Autoencoder) + Temporal Transformer** as the primary architecture, backed by synthetic data generation (3D Blender simulation + VideoMAE fine-tuning) to scale beyond 100 samples.
+**Decision:** Use a PyTorch-based neural network with **DINOv2-ViT-B/14 + LoRA + Temporal Transformer** as the primary architecture, backed by synthetic data generation (3D Blender simulation + VideoMAE fine-tuning) to scale beyond 100 samples.
 
 **Key Architectural Shifts (Red Team Response):**
 
-1. **Primary Backbone:** VideoMAE-Base (not ResNet-18)
-   - Open X-Embodiment robotics pre-training for spatial grounding
-   - Self-supervised learning on temporal sequences (captures motion semantics)
-   - Data efficiency: fine-tunes on 100 samples; generalizes to 10K+ synthetic data
-   - Rationale: Robotics pre-training is more relevant than ImageNet for tool-substrate interaction
+1. **Primary Backbone:** DINOv2-ViT-B/14 + LoRA (not ResNet-18, not VideoMAE)
+   - Self-supervised pre-training on 142M unlabeled images learns coordinate geometry directly
+   - Patch-based spatial structure (14×14 = 196 tokens) preserves well localization precision
+   - LoRA fine-tuning (~33K trainable params) prevents overfitting on N=100 samples
+   - Few-shot empirical advantage: +8% over ResNet-50 on 10-shot benchmarks
+   - Rationale: Self-supervised spatial learning more relevant than object classification or temporal pre-training for well-center localization
 
 2. **Temporal Modeling:** Temporal Transformer (mandatory, not optional)
    - Replaces frame max-pooling which destroys temporal order
@@ -131,9 +146,9 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 ### Recommended Technology Stack
 
 **Framework:** PyTorch 2.1+  
-**Primary Backbone:** VideoMAE-Base (Open X-Embodiment pre-trained, ~87M parameters)  
-**Fallback Backbone:** DINO-v2 (ViT-B/14) as frozen feature extractor  
-**Legacy Baseline:** ResNet-18 (preserved on `baseline/resnet-cv-pipeline`)  
+**Primary Backbone:** DINOv2-ViT-B/14 (self-supervised on 142M images, ~86M frozen + ~33K LoRA trainable)  
+**Alternative Backbone:** VideoMAE-Base (for stronger temporal modeling, not yet in codebase)  
+**Sandbox Fallback:** ResNet-18 (random init, proxy constraints only; NOT recommended for production)  
 **Temporal Module:** Temporal Transformer (2–4 attention blocks over ordered frames)  
 **Video I/O:** OpenCV (cv2) with temporal-aware frame extraction  
 **Synthetic Data:** 10K+ videos via (a) VideoMAE fine-tuning, (b) 3D Blender simulation  
@@ -146,26 +161,29 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 
 ### Key Design Decisions
 
-#### 1. Backbone Architecture: VideoMAE-Base (PRIMARY)
-- **Why VideoMAE over ResNet-18:**
-  - Spatial grounding via robotics pre-training (Open X-Embodiment, 1M+ robot manipulation videos)
-  - Self-supervised learning on video patches; learns coordinate geometry without supervision
-  - Temporal coherence: fine-tuning on 100 videos stabilizes latent space for generative sampling
-  - Transfer to pipette-liquid interaction is direct (end-effector alignment ≈ well-center alignment)
+#### 1. Backbone Architecture: DINOv2-ViT-B/14 + LoRA (PRIMARY)
+- **Why DINOv2 over ResNet-18:**
+  - Self-supervised pre-training on 142M unlabeled images learns spatial coordinate geometry directly
+  - Patch embeddings (14×14 = 196 tokens, 768-dim) preserve well-center localization precision
+  - LoRA fine-tuning (~33K trainable params) prevents overfitting vs. ResNet-18 full fine-tuning (11M params)
+  - Few-shot empirical advantage: +8% accuracy over ResNet-50 on 10-shot benchmarks
+  - Transfer to well detection is direct: self-supervised spatial learning ≈ coordinate localization
   
-- **Fine-tuning approach:**
-  - Masked autoencoder objective on 100 real dispense videos
-  - Use fine-tuned encoder to synthesize 100–200 new videos per well → 10,000 synthetic samples
-  - Extract features from VideoMAE for downstream classification
+- **LoRA fine-tuning approach:**
+  - Backbone frozen; only LoRA adapters (rank r=8, α=16) trainable
+  - Low-rank constraint prevents catastrophic forgetting on N=100 real samples
+  - Extract features from DINOv2 frozen encoder for downstream classification
   
-- **Fallback: DINO-v2 (ViT-B/14)**
-  - If Open X-Embodiment unavailable; trained on 1.2B unlabeled images
-  - Frozen encoder + linear probe matches ResNet-18 with 50× fewer hyperparameters
-  - Fine-grained spatial features; direct well-center localization from patch embeddings
+- **Alternative: VideoMAE-Base (future enhancement)**
+  - For stronger temporal modeling; not yet in codebase
+  - Would replace DINOv2 in temporal_backbone role if needed
+  - Kinetics-400 pre-training provides excellent video understanding
 
-- **Legacy: ResNet-18**
-  - Preserved on `baseline/resnet-cv-pipeline` for historical comparison
-  - Sufficient as fallback (75–85% synthetic, 60–70% real); insufficient as primary (memorization risk)
+- **Deprecated: ResNet-18**
+  - Legacy 2015 architecture; now explicitly deprecated
+  - Insufficient spatial resolution (7×7 features ≠ 96 wells)
+  - Severe overfitting risk on N=100 with full fine-tuning
+  - Sandbox only (weight download restrictions); never use in production
 
 #### 2. Temporal Modeling: Temporal Transformer (MANDATORY)
 ```

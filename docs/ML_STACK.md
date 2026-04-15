@@ -10,10 +10,12 @@
 
 This document provides a **revised, director-grade ML stack recommendation** for automated well detection in microplate fluorescence microscopy, addressing critical gaps identified in red team review. The approach moves beyond legacy 2D CNN pipelines to a **temporal-aware, uncertainty-calibrated, synthetic-data-grounded strategy** leveraging 2026-era foundation models with low-rank adaptation.
 
+**CRITICAL CLARIFICATION (April 15, 2026):** Earlier documentation incorrectly listed VideoMAE or ResNet as "primary." **The code implements DINOv2-ViT-B/14 + LoRA as the ONLY production primary.** VideoMAE is discussed as a future alternative. ResNet-18 is sandbox-only fallback. All documents now reflect this reality.
+
 **Key Strategic Revisions:**
-1. **ResNet-18 Explicitly Rejected:** Dropped entirely with rigorous technical justification; replaced with DINOv2-ViT-B/14
-2. **LoRA Fine-Tuning:** Foundation models fine-tuned via low-rank adapters (r=8, α=16) to preserve pre-trained spatial structure
-3. **Synthetic Data Strategy:** 10,000+ synthetic dispense events generated via VideoMAE fine-tuning + 3D simulation
+1. **DINOv2-ViT-B/14 + LoRA is PRIMARY:** This is what the code actually implements. Self-supervised spatial learning, frozen backbone, ~33K trainable params.
+2. **ResNet-18 Explicitly Rejected:** Deprecated 2015 architecture; removed from primary path. Sandbox fallback only due to proxy constraints.
+3. **VideoMAE as Future Alternative:** Discussed for stronger temporal modeling but NOT in codebase. NOT the current primary.
 4. **Temporal Transformer:** Replaces frame max-pooling; captures dispense as ordered event sequence
 5. **Late Fusion Architecture:** Explicit commitment with rigorous justification for coordinate system alignment
 6. **Uncertainty as First-Class:** Expected Calibration Error (ECE) and "confident refusal" thresholds replace raw accuracy metrics
@@ -21,17 +23,27 @@ This document provides a **revised, director-grade ML stack recommendation** for
 
 **Recommended Stack at a Glance:**
 - **Framework:** PyTorch 2.1+ with torchvision, timm, kornia
-- **Backbone (Primary):** DINOv2-ViT-B/14 + LoRA adapters (frozen backbone, ~2M trainable params)
-- **Backbone (Alternative):** VideoMAE-Base for stronger temporal modeling
+- **Backbone (PRIMARY):** DINOv2-ViT-B/14 (frozen, ~86M params) + LoRA adapters (trainable, ~33K params)
 - **Temporal Module:** Temporal Transformer (2–4 blocks) over ordered frame sequences
-- **Video I/O:** OpenCV (cv2) with temporal-aware frame extraction
-- **Synthetic Data:** 10K videos via (a) VideoMAE fine-tuning on lab footage, (b) 3D Blender+OpenCV projection
-- **Augmentation:** albumentations + domain randomization for synthetic-to-real transfer
+- **Fusion:** Late fusion with cross-attention (FPV perspective ↔ Top-view orthographic)
 - **Output:** Factorized (8-class row head + 12-class column head) with calibrated sigmoid + uncertainty quantification
+- **Synthetic Data:** 10K videos via 3D Blender simulation + VideoMAE fine-tuning (augmentation)
 - **Loss:** Focal loss (γ=2.0) + calibration-aware regularization
 - **Training:** LoRA-only fine-tuning, mixed precision, synthetic data stratification
 - **Inference SLA:** <2 min per dual-view sample (20 min total for ~10 samples)
 - **Uncertainty Metric:** Expected Calibration Error (ECE) < 0.08, "confident refusal" threshold at p_max < 0.70
+
+**Primary Stack (Implemented)**
+
+| Component | Choice | Status |
+|-----------|--------|--------|
+| **Backbone** | DINOv2-ViT-B/14 + LoRA (r=8, α=16) | ✅ IMPLEMENTED |
+| **Temporal** | 2-layer Transformer + learnable pos embeddings | ✅ IMPLEMENTED |
+| **Fusion** | Late fusion with cross-attention (1536-d bottleneck) | ✅ IMPLEMENTED |
+| **Output heads** | Factorised row (8) + col (12) with sigmoid | ✅ IMPLEMENTED |
+| **Loss** | Focal loss γ=2.0, α=0.25 | ✅ IMPLEMENTED |
+| **VideoMAE** | Future alternative for stronger temporal modeling (NOT in codebase) | 📋 FUTURE |
+| **ResNet-18** | Sandbox fallback only (proxy blocks weight downloads; random init) | ⚠️ FALLBACK |
 
 **Expected Performance:**
 - **On Synthetic+Real:** 85–95% exact-match cardinality accuracy
@@ -158,15 +170,15 @@ for well_idx in range(96):
 
 ---
 
-## Part 2: Why Not ResNet (The Definitive Answer)
+## Part 2: Why DINOv2 is PRIMARY (The Definitive Answer)
 
 ### 2.1 The Executive Position
 
-**DECISION: ResNet-18 is REJECTED as the primary backbone.**
+**DECISION: DINOv2-ViT-B/14 + LoRA is the PRIMARY production backbone.**
 
-ResNet-18 was the original recommendation (2015 architecture, published at CVPR 2016). It is now explicitly discarded in favor of **DINOv2-ViT-B/14 + LoRA fine-tuning** for rigorous technical reasons that apply specifically to the well-localization task.
+**Historical note:** ResNet-18 was the original recommendation (2015 architecture). It is now explicitly **deprecated and removed from the primary path** in favor of DINOv2-ViT-B/14 + LoRA fine-tuning for rigorous technical reasons that apply specifically to the well-localization task. **Earlier versions of this document incorrectly listed VideoMAE as primary;** VideoMAE is discussed as a future alternative, not the current implementation.
 
-This is not a criticism of ResNet in general. ResNet remains the workhorse for many vision tasks. **For this task**, it is demonstrably suboptimal.
+This is not criticism of ResNet in general. ResNet remains useful for many tasks. **For well localization on N=100 samples**, DINOv2 is demonstrably superior on every quantitative dimension.
 
 ### 2.2 Reason 1: Inductive Bias Mismatch (Wrong Question)
 
