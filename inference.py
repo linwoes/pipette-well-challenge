@@ -170,7 +170,8 @@ class PipetteWellDetector:
         # Try to load checkpoint
         if os.path.exists(checkpoint_path):
             try:
-                state = torch.load(checkpoint_path, map_location=self.device)
+                state = torch.load(checkpoint_path, map_location=self.device,
+                                       weights_only=True)
                 model.load_state_dict(state['model_state_dict'])
                 logger.info(f"Loaded checkpoint from {checkpoint_path}")
             except Exception as e:

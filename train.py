@@ -439,16 +439,23 @@ class Trainer:
                     break
 
     def _save_checkpoint(self, epoch: int, metrics: Dict):
-        """Save model checkpoint."""
+        """Save model checkpoint compatible with weights_only=True.
+
+        All metric values are explicitly cast to native Python float/int so
+        that no numpy scalar types end up in the pickle stream.  This makes
+        the checkpoint loadable with ``torch.load(..., weights_only=True)``
+        (the safe default in PyTorch >= 2.6) without any allowlist.
+        """
         checkpoint = {
-            'epoch': epoch,
+            'epoch': int(epoch),
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'scheduler_state_dict': self.scheduler.state_dict(),
-            'val_loss': metrics['val_loss'],
-            'exact_match': metrics['exact_match'],
-            'jaccard': metrics['jaccard'],
-            'cardinality_acc': metrics['cardinality_acc'],
+            # Cast every metric to a plain Python float — keeps numpy out of pickle
+            'val_loss':        float(metrics['val_loss']),
+            'exact_match':     float(metrics['exact_match']),
+            'jaccard':         float(metrics['jaccard']),
+            'cardinality_acc': float(metrics['cardinality_acc']),
         }
 
         path = self.output_dir / 'best.pt'
