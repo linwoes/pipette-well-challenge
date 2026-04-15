@@ -137,7 +137,7 @@ models/*.pt
 *.avi
 *.mov
 *.mkv
-/data/
+# /data/ — tracked via git-lfs (pointer files only)
 /output/
 /results/
 /checkpoints/

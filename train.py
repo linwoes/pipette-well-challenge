@@ -19,14 +19,36 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+
+# Try to import torch with CUDA library path handling
+try:
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+    from torch.utils.data import Dataset, DataLoader
+except ImportError as e:
+    # If CUDA library errors, set environment to suppress them
+    if 'libcuda' in str(e).lower() or 'libc++' in str(e).lower():
+        os.environ['LD_LIBRARY_PATH'] = '/usr/lib/x86_64-linux-gnu:' + os.environ.get('LD_LIBRARY_PATH', '')
+        # Retry import after setting LD_LIBRARY_PATH
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from torch.utils.data import Dataset, DataLoader
+    else:
+        raise
+
 import yaml
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
+
+# Handle albumentations gracefully
+try:
+    import albumentations as A
+    from albumentations.pytorch import ToTensorV2
+    HAS_ALBUMENTATIONS = True
+except ImportError:
+    HAS_ALBUMENTATIONS = False
+    logging.warning("albumentations not available, using basic transforms")
 
 from src.models.backbone import DINOv2Backbone
 from src.models.fusion import DualViewFusion, WellDetectionLoss, TemporalAttention
@@ -78,7 +100,7 @@ class PipetteWellDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.num_frames = num_frames
         self.img_size = img_size
-        self.augment = augment
+        self.augment = augment and HAS_ALBUMENTATIONS
 
         # Load labels
         with open(labels_path, 'r') as f:
@@ -86,8 +108,8 @@ class PipetteWellDataset(Dataset):
 
         logger.info(f"Loaded {len(self.labels)} labels")
 
-        # Build augmentation pipeline
-        if augment:
+        # Build augmentation pipeline (only if albumentations available)
+        if self.augment:
             self.transform = A.Compose([
                 A.RandomResizedCrop(img_size, img_size, scale=(0.8, 1.0)),
                 A.HorizontalFlip(p=0.3),
@@ -97,12 +119,14 @@ class PipetteWellDataset(Dataset):
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], is_check_shapes=False)
-        else:
+        elif HAS_ALBUMENTATIONS:
             self.transform = A.Compose([
                 A.Resize(img_size, img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], is_check_shapes=False)
+        else:
+            self.transform = None  # Will use simple normalization
 
     def __len__(self) -> int:
         return len(self.labels)
@@ -117,12 +141,20 @@ class PipetteWellDataset(Dataset):
         """
         label_entry = self.labels[idx]
 
-        # Build video paths
+        # Build video paths - clip IDs already include full filename
         fpv_stem = label_entry['clip_id_FPV']
         topview_stem = label_entry['clip_id_Topview']
 
         fpv_path = self.data_dir / f"{fpv_stem}.mp4"
         topview_path = self.data_dir / f"{topview_stem}.mp4"
+
+        # Check if files exist
+        if not fpv_path.exists():
+            logger.warning(f"FPV file not found: {fpv_path}")
+            raise FileNotFoundError(f"FPV file not found: {fpv_path}")
+        if not topview_path.exists():
+            logger.warning(f"Topview file not found: {topview_path}")
+            raise FileNotFoundError(f"Topview file not found: {topview_path}")
 
         # Load and preprocess videos
         try:
@@ -136,19 +168,36 @@ class PipetteWellDataset(Dataset):
             fpv_processed = np.array([preprocess_frame(f, size=(self.img_size, self.img_size)) for f in fpv_frames])
             topview_processed = np.array([preprocess_frame(f, size=(self.img_size, self.img_size)) for f in topview_frames])
 
-            # Apply augmentation per frame
+            # Apply transforms per frame
             fpv_list = []
             for f in fpv_processed:
-                # Convert from [0, 1] to [0, 255] for albumentations
-                f_uint8 = (f * 255).astype(np.uint8)
-                augmented = self.transform(image=f_uint8)
-                fpv_list.append(augmented['image'])
+                if self.transform is not None:
+                    # Convert from [0, 1] to [0, 255] for albumentations
+                    f_uint8 = (f * 255).astype(np.uint8)
+                    augmented = self.transform(image=f_uint8)
+                    fpv_list.append(augmented['image'])
+                else:
+                    # Simple normalization without albumentations
+                    fpv_tensor = torch.from_numpy(f).permute(2, 0, 1).float()
+                    # ImageNet normalization
+                    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                    fpv_tensor = (fpv_tensor - mean) / std
+                    fpv_list.append(fpv_tensor)
 
             topview_list = []
             for f in topview_processed:
-                f_uint8 = (f * 255).astype(np.uint8)
-                augmented = self.transform(image=f_uint8)
-                topview_list.append(augmented['image'])
+                if self.transform is not None:
+                    f_uint8 = (f * 255).astype(np.uint8)
+                    augmented = self.transform(image=f_uint8)
+                    topview_list.append(augmented['image'])
+                else:
+                    # Simple normalization
+                    topview_tensor = torch.from_numpy(f).permute(2, 0, 1).float()
+                    mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+                    std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+                    topview_tensor = (topview_tensor - mean) / std
+                    topview_list.append(topview_tensor)
 
             fpv_tensor = torch.stack(fpv_list)  # (N, 3, H, W)
             topview_tensor = torch.stack(topview_list)  # (N, 3, H, W)
@@ -420,6 +469,8 @@ def main():
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--num_frames', type=int, default=8, help='Frames per video')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu)')
+    parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
+                        help='Backbone architecture (dinov2 or resnet18 for CPU training)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
 
     args = parser.parse_args()
@@ -451,17 +502,19 @@ def main():
 
     logger.info(f"Train size: {len(train_dataset)}, Val size: {len(val_dataset)}")
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, pin_memory=False)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False)
 
     # Build model
-    logger.info("Building model...")
+    logger.info(f"Building model with {args.backbone} backbone...")
+    use_dinov2 = (args.backbone == 'dinov2')
     model = DualViewFusion(
         num_rows=8,
         num_columns=12,
         shared_backbone=True,
         use_lora=True,
         lora_rank=8,
+        use_dinov2=use_dinov2,
     )
     model = model.to(device)
 

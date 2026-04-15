@@ -124,6 +124,7 @@ class DualViewFusion(nn.Module):
         output_dim: int = 256,
         dropout: float = 0.3,
         max_frames: int = 8,
+        use_dinov2: bool = True,
     ):
         """
         Initialize DualViewFusion model.
@@ -141,6 +142,7 @@ class DualViewFusion(nn.Module):
             output_dim: Output dimension before heads (default 256)
             dropout: Dropout rate (default 0.3)
             max_frames: Maximum frame sequence length (default 8)
+            use_dinov2: Use DINOv2 backbone if True, ResNet18 if False (default True)
         """
         super().__init__()
 
@@ -148,22 +150,37 @@ class DualViewFusion(nn.Module):
         self.num_columns = num_columns
         self.shared_backbone = shared_backbone
         self.temporal_dim = temporal_dim
+        self.use_dinov2 = use_dinov2
 
         # Initialize backbones
-        self.backbone_fpv = DINOv2Backbone(
-            use_lora=use_lora,
-            lora_rank=lora_rank,
-            freeze_base=True
-        )
-
-        if not shared_backbone:
-            self.backbone_topview = DINOv2Backbone(
+        if use_dinov2:
+            self.backbone_fpv = DINOv2Backbone(
                 use_lora=use_lora,
                 lora_rank=lora_rank,
                 freeze_base=True
             )
+            if not shared_backbone:
+                self.backbone_topview = DINOv2Backbone(
+                    use_lora=use_lora,
+                    lora_rank=lora_rank,
+                    freeze_base=True
+                )
+            else:
+                self.backbone_topview = None
         else:
-            self.backbone_topview = None
+            # Use ResNet18 fallback for CPU training
+            from .backbone import LegacyResNet18Backbone
+            self.backbone_fpv = LegacyResNet18Backbone(pretrained=True, freeze_early=True)
+            # ResNet18 outputs 512 dims, need to adjust temporal_dim
+            self.temporal_dim = 512
+            temporal_dim = 512
+            # ResNet18 with 512 dims needs nhead divisible by 8
+            temporal_nhead = 8  # 512 / 8 = 64
+
+            if not shared_backbone:
+                self.backbone_topview = LegacyResNet18Backbone(pretrained=True, freeze_early=True)
+            else:
+                self.backbone_topview = None
 
         # Temporal attention for each view
         self.temporal_fpv = TemporalAttention(

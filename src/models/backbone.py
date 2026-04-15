@@ -7,11 +7,14 @@ Implements:
   - LoRA adapter injection into attention layers
 """
 
+import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 from typing import Optional, Dict, Any
+
+_logger = logging.getLogger(__name__)
 
 
 class LoRAAdapter(nn.Module):
@@ -300,10 +303,21 @@ class LegacyResNet18Backbone(nn.Module):
         """
         super().__init__()
 
-        from torchvision.models import resnet18
+        from torchvision.models import resnet18, ResNet18_Weights
 
-        # Load ResNet-18
-        self.model = resnet18(pretrained=pretrained)
+        # Load ResNet-18 — gracefully fall back to random weights if download blocked
+        if pretrained:
+            try:
+                self.model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+                _logger.info("Loaded ImageNet pretrained ResNet-18 weights")
+            except Exception as e:
+                _logger.warning(
+                    f"Could not download pretrained weights ({e}). "
+                    "Training from random initialisation."
+                )
+                self.model = resnet18(weights=None)
+        else:
+            self.model = resnet18(weights=None)
 
         # Remove classification head (replace with identity)
         self.model.fc = nn.Identity()

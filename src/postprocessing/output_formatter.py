@@ -52,6 +52,7 @@ def logits_to_wells(row_logits: np.ndarray, col_logits: np.ndarray, threshold: f
 def validate_output(wells: List[Dict]) -> bool:
     """
     Validate that all wells have valid row and column values.
+    Handles both string and int well_column values.
 
     Args:
         wells: List of well dictionaries
@@ -75,7 +76,12 @@ def validate_output(wells: List[Dict]) -> bool:
             return False
         if well['well_row'] not in valid_rows:
             return False
-        if well['well_column'] not in valid_cols:
+        # Handle both string and int for well_column
+        try:
+            col = int(well['well_column'])
+            if col not in valid_cols:
+                return False
+        except (ValueError, TypeError):
             return False
 
     return True
