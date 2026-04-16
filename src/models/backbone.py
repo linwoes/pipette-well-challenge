@@ -47,6 +47,25 @@ def validate_dinov2_input(x: torch.Tensor, patch_size: int = DINOV2_PATCH_SIZE) 
         )
 
 
+class LoRAWrappedLinear(nn.Module):
+    """
+    Wraps an existing nn.Linear with a LoRA adapter.
+
+    Replaces the original module in-place so PyTorch's nn.Module attribute
+    assignment is satisfied (no lambda / plain function workaround needed).
+
+    output = original_linear(x) + lora_adapter(x)
+    """
+
+    def __init__(self, original: nn.Module, adapter: 'LoRAAdapter'):
+        super().__init__()
+        self.original = original
+        self.adapter = adapter
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.original(x) + self.adapter(x)
+
+
 class LoRAAdapter(nn.Module):
     """
     Low-rank adapter (LoRA) for efficient fine-tuning.
@@ -229,18 +248,15 @@ class DINOv2Backbone(nn.Module):
         v_adapter = self.lora_adapters[f'block_{block_idx}_v']
 
         if hasattr(attn, 'q_proj') and hasattr(attn, 'v_proj'):
-            # torch.hub / native DINOv2 style — separate projections
-            original_q = attn.q_proj
-            original_v = attn.v_proj
-            attn.q_proj = lambda x, _q=original_q, _a=q_adapter: _q(x) + _a(x)
-            attn.v_proj = lambda x, _v=original_v, _a=v_adapter: _v(x) + _a(x)
+            # torch.hub / native DINOv2 style — separate q_proj / v_proj
+            attn.q_proj = LoRAWrappedLinear(attn.q_proj, q_adapter)
+            attn.v_proj = LoRAWrappedLinear(attn.v_proj, v_adapter)
 
         elif hasattr(attn, 'qkv'):
-            # timm style — fused QKV projection
-            original_qkv = attn.qkv
-            # Use q_adapter for the LoRA term (v_adapter is redundant here
-            # but kept registered so parameter counts remain consistent)
-            attn.qkv = lambda x, _qkv=original_qkv, _a=q_adapter: _qkv(x) + _a(x)
+            # timm style — fused QKV projection (Linear(d, 3*d))
+            # Wrap the entire projection; q_adapter adds LoRA to the combined output.
+            # v_adapter is kept registered (parameter count consistency) but not applied.
+            attn.qkv = LoRAWrappedLinear(attn.qkv, q_adapter)
 
         else:
             _logger.warning(
