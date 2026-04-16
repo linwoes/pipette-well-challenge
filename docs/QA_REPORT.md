@@ -126,7 +126,7 @@ Code implementation matches this domain knowledge in all locations.
 **What Works:**
 - `TemporalAttention` (lines 17-89): ✓ Transformer over frame sequences; learnable positional embeddings; mean pooling
 - `DualViewFusion` (lines 92-268): ✓ Shared backbone, dual temporal attention, late fusion MLP, factorized row/col heads
-- `WellDetectionLoss` (lines 271-372): ✓ Focal loss with proper weighting (γ=2.0, α=0.25)
+- `WellDetectionLoss` (lines 271-372): ✓ Focal loss with proper weighting (γ=2.0, α=0.75)
 - Output heads: ✓ Return raw logits (no sigmoid; applied in loss)
 
 **Architecture Decisions:**

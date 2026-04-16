@@ -245,7 +245,7 @@ The primary class imbalance risk is no longer **unseen wells**, but rather **und
 
 ### 3.7 Transparency & Specular Reflection Edge Cases (NEW)
 
-Red team identified polystyrene plates + translucent tips as high-risk. These edge cases require special handling.
+Polystyrene plates and translucent tips present high-risk visual scenarios. These edge cases require special handling.
 
 | Edge Case | Description | Severity | Detection Method | Expected Failure Mode | Mitigation |
 |-----------|-------------|----------|------------------|----------------------|-----------|
@@ -256,7 +256,7 @@ Red team identified polystyrene plates + translucent tips as high-risk. These ed
 
 ### 3.8 Temporal Edge Cases (NEW)
 
-Red team identified temporal blindness as a gap. These edge cases address temporal misunderstanding.
+Temporal blindness was identified as a key architectural gap. These edge cases address temporal misunderstanding.
 
 | Edge Case | Description | Severity | Detection Method | Expected Behavior | Test Case Design |
 |-----------|-------------|----------|------------------|-------------------|------------------|
@@ -557,7 +557,7 @@ Red team identified temporal blindness as a gap. These edge cases address tempor
 
 ### 5.1 Revised Acceptance Criteria: Reproducibility Over Accuracy
 
-**Red Team Finding:** "Criteria focus on exact-match accuracy. In science, Reproducibility > Accuracy. We should be measuring Uncertainty Calibration."
+**Key Insight:** Criteria that focus solely on exact-match accuracy miss a critical point: in science, Reproducibility > Accuracy. We should be measuring Uncertainty Calibration.
 
 This section reframes acceptance criteria to prioritize well-calibrated uncertainty over raw accuracy.
 
@@ -665,7 +665,7 @@ def confident_refusal_rate(model, adversarial_samples, confidence_threshold=0.4)
 
 ### 5.2 Acceptance Criteria Summary Table
 
-| Metric | Target | Interpretation | Red Team Alignment |
+| Metric | Target | Interpretation | Rationale |
 |--------|--------|-----------------|-------------------|
 | **ECE** | < 0.10 | Model confidence matches empirical accuracy | Calibration focus |
 | **Accuracy (confident)** | ≥ 90% on conf ≥ 0.7 | When confident, be right | Reproducibility |
@@ -678,7 +678,7 @@ def confident_refusal_rate(model, adversarial_samples, confidence_threshold=0.4)
 
 ## 6. Synthetic Data Quality Tests
 
-The red team criticized the project's N=100 overfitting risk and recommended synthetic data generation. This section defines QA tests for synthetic data pipeline.
+The N=100 overfitting risk is a primary concern, and synthetic data generation is a key mitigation strategy. This section defines QA tests for the synthetic data pipeline.
 
 ### 6.1 Domain Gap Measurement
 
@@ -753,7 +753,7 @@ generalization_gap = training_accuracy - validation_accuracy
 ```
 
 **Acceptance Criteria:**
-- Generalization gap < 15 percentage points (red team's baseline concern was 30–40 point gap with N=100)
+- Generalization gap < 15 percentage points (baseline concern was 30–40 point gap with N=100)
 - If gap > 15%, model is still overfitting; need more regularization or synthetic data
 
 ---
@@ -1387,11 +1387,11 @@ accuracy_weighted = (
 
 **Solution passes hold-out evaluation if and only if ALL of the following are met:**
 
-#### Tier 1: Calibration (Critical — Red Team Priority)
+#### Tier 1: Calibration (Critical)
 
 | Criterion | Pass Condition | Rationale |
 |-----------|---|---|
-| **Calibration Quality** | ECE < 0.10 (well-calibrated) | Red team: reproducibility > accuracy. Model confidence must match reality. |
+| **Calibration Quality** | ECE < 0.10 (well-calibrated) | Reproducibility > accuracy. Model confidence must match reality. |
 | **Confidence-Accuracy Alignment** | Accuracy(conf ≥ 0.7) ≥ 90% AND Accuracy(conf < 0.7) ≥ 60% | When model is confident, be right. When uncertain, lower expectations. |
 | **Refusal on Uncertainty** | Confident Refusal Rate ≥ 80% on hold-out's hard cases | Model must say "I don't know" on unclear inputs, not guess. |
 

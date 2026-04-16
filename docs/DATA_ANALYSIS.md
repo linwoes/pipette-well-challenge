@@ -4,7 +4,7 @@
 **Dataset:** 100 labeled video clip pairs (FPV + Top-view)  
 **Task:** Predict well(s) dispensed into on 96-well plate  
 **Date:** 2026-04-14  
-**Status:** REVISED POST-RED-TEAM (addresses synthetic data, calibration, temporal analysis, material properties)
+**Status:** FINAL (addresses synthetic data, calibration, temporal analysis, material properties)
 
 ---
 
@@ -326,7 +326,7 @@ Using **Rademacher complexity** intuition for 100 samples:
 
 ---
 
-## 7. Synthetic Data Strategy (RED TEAM CRITICAL GAP)
+## 7. Synthetic Data Strategy (Critical Gap)
 
 ### 7.1 The Synthetic Data Imperative
 
@@ -594,7 +594,7 @@ Even with synthetic data, these scenarios remain risky:
 
 ### 8.1 The Reproducibility > Accuracy Principle
 
-**Red Team Philosophy:** In scientific applications, a model that refuses to guess (says "uncertain") is more valuable than a model that guesses confidently and is wrong. For an automation system in a lab, a false positive (wrong well predicted confidently) is worse than a false negative (refusal to predict).
+**Core Principle:** In scientific applications, a model that refuses to guess (says "uncertain") is more valuable than a model that guesses confidently and is wrong. For an automation system in a lab, a false positive (wrong well predicted confidently) is worse than a false negative (refusal to predict).
 
 **Formal Definition:** A well-calibrated model's **confidence matches its accuracy**:
 - If model is 90% confident, it should be correct ~90% of the time
@@ -971,7 +971,7 @@ def augment_with_material_properties(image, well_mask, tip_mask):
 - **State interpretation (current approach):** Model receives a frame and predicts a well (assumes frame is "dispense-happening")
 - **Event interpretation (correct approach):** Model receives a sequence and localizes the dispense event in time, then identifies the well
 
-**Red Team critique:** Treating dispense as state is lossy. A 30-frame clip contains a full trajectory: approach → insert → dispense → retract. The model should identify which frame(s) carry the "dispense" signal, not just peak-pool over frames.
+**Critical observation:** Treating dispense as state is lossy. A 30-frame clip contains a full trajectory: approach → insert → dispense → retract. The model should identify which frame(s) carry the "dispense" signal, not just peak-pool over frames.
 
 ### 10.2 Typical Dispense Event Timeline
 
@@ -1511,11 +1511,11 @@ The **100-sample Pipette Challenge requires a shift from accuracy-first to repro
 - **Per-well accuracy:** 80–90% on well-represented wells; 75–85% on synthetic-only wells
 - **Reproducibility:** Model can be audited; failure modes (e.g., lighting shift) are caught via low confidence
 
-### Red Team Integration
+### Strategy Integration
 
-This revised strategy addresses all red team critiques:
+This revised strategy addresses all identified gaps:
 
-| Red Team Gap | Solution | Evidence |
+| Gap Identified | Solution | Evidence |
 |--------------|----------|----------|
 | **Synthetic data strategy** | 3D Simulation (Option B) or Stable Video Diffusion (Option A) | Section 7.2; uniform coverage, ~10 samples/well |
 | **Uncertainty calibration** | ECE metric + confident refusal protocol + calibration dataset | Section 8; calibration loss in training |

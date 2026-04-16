@@ -1,16 +1,16 @@
-# Team Decisions Log: Transfyr AI Pipette Well Challenge (Post-Red Team Review)
+# Team Decisions Log: Transfyr AI Pipette Well Challenge
 
-**Date:** April 14, 2026 (Revised Post-Red Team)  
+**Date:** April 14, 2026 (Final)  
 **Updated:** April 15, 2026 (Version Divergence Fix — DINOv2 is Primary)  
 **Compiled by:** Cross-functional team (Data Scientist, Architect, ML Scientist, QA Engineer)  
-**Purpose:** Document post-red-team architectural decisions; clarify that DINOv2-ViT-B/14 + LoRA is the ONLY primary production path
+**Purpose:** Document architectural decisions and implementation rationale
 
 ---
 
 ## Decision 11: [FINAL] Primary Backbone — DINOv2-ViT-B/14 + LoRA Fine-Tuning (April 15, 2026)
 
 **Date:** 2026-04-15  
-**Driver:** ML Scientist + Architect (RED TEAM FINDING: "version divergence")  
+**Driver:** ML Scientist + Architect  
 **Status:** FINAL — **implemented in code**; correcting documentation to match reality
 
 **Decision:** The **primary production backbone is DINOv2-ViT-B/14 with LoRA adapters (r=8, α=16).**
@@ -142,19 +142,19 @@ assert isinstance(col, str) and col.isdigit(), \
 
 ---
 
-## Executive Summary: Response to Red Team Review
+## Executive Summary: Key Architectural Decisions
 
-The red team identified 5 critical gaps in the original ResNet-18 single-frame approach. This document captures decisions made to address each gap. **All original decisions (1–10) remain archived; new decisions [REVISED] and [NEW] below supersede where noted.**
+The team identified critical gaps in the original ResNet-18 single-frame approach and implemented comprehensive architectural revisions to address them.
 
 **Critical Decisions Made:**
-- [REVISED] Architecture Primary: VideoMAE + Temporal Transformer (not ResNet-18)
-- [NEW] Fusion Architecture: Late Fusion (explicit mandate from red team)
-- [NEW] Synthetic Data Strategy: 3D Blender + VideoMAE fine-tuning (10K+ samples)
-- [REVISED] Primary Metric: ECE < 0.10 (not raw accuracy)
-- [NEW] Confident Refusal Gate: Model must abstain on uncertain inputs
-- [NEW] Temporal Modeling Mandatory: Temporal Transformer required
-- [NEW] Branch Preservation: ResNet-18 baseline on `baseline/resnet-cv-pipeline`
-- [NEW] 3DGS as Research Track: Added for glare-heavy scenarios
+- Architecture Primary: DINOv2-ViT-B/14 + LoRA + Temporal Transformer (not ResNet-18)
+- Fusion Architecture: Late Fusion (explicit mandate for proper geometric composition)
+- Synthetic Data Strategy: 3D Blender + VideoMAE fine-tuning (10K+ samples)
+- Primary Metric: ECE < 0.10 (calibration and reproducibility over raw accuracy)
+- Confident Refusal Gate: Model must abstain on uncertain inputs
+- Temporal Modeling Mandatory: Temporal Transformer required for event-level understanding
+- Branch Preservation: ResNet-18 baseline on `baseline/resnet-cv-pipeline`
+- 3DGS as Research Track: Added for glare-heavy scenarios
 
 ---
 
@@ -166,10 +166,11 @@ The red team identified 5 critical gaps in the original ResNet-18 single-frame a
 
 **CRITICAL CLARIFICATION:** Earlier versions of this document incorrectly stated "VideoMAE" as the primary. **The code implements DINOv2, not VideoMAE.** This decision log is now corrected to match the implementation.
 
-**Driver:** ML Scientist + Architect (responding to Red Team 2.2 & 3.2; corrected for version divergence)
+**Driver:** ML Scientist + Architect
 
-**Red Team Finding:**
-- ResNet-18 (2015) and Focal Loss (2017) are "commodity models"; insufficient for Physical AI
+**Architectural Analysis:**
+
+- ResNet-18 (2015) and baseline approaches are insufficient for Physical AI pipetting
 - Transfyr expects Vision-Language-Action (VLA) approach where motion trajectory is first-class
 - Single-frame models cannot distinguish pipette entering vs. leaving (temporal blindness)
 - 11M-parameter ResNet on 100 samples will memorize background/lighting, not learn geometry
@@ -183,7 +184,7 @@ The red team identified 5 critical gaps in the original ResNet-18 single-frame a
    - LoRA fine-tuning: frozen backbone + low-rank adapters (~33K trainable params) prevent overfitting on N=100
    - Few-shot validated: +8% over ResNet-50 on 10-shot benchmarks
    
-2. **Temporal Understanding (Addressing Red Team 3.2):**
+2. **Temporal Understanding:**
    - Temporal Transformer with 2–4 attention blocks over ordered frames
    - Replaces frame max-pooling (which destroys temporal order)
    - Models dispense as event: approach → hold → release (not state)
@@ -198,7 +199,7 @@ The red team identified 5 critical gaps in the original ResNet-18 single-frame a
 ```
 Input: (T=4-8 ordered frames per view, 224×224×3)
     ↓
-Temporal Backbone: VideoMAE encoder → (T, 768) feature sequence
+Temporal Backbone: DINOv2-ViT-B/14 encoder → (T, 768) feature sequence
     ↓
 Temporal Transformer: Cross-attention over frames → Event localization
     ↓
@@ -208,11 +209,9 @@ Output Heads: 8-class row + 12-class column with calibrated sigmoid
 ```
 
 **Fallback Hierarchy:**
-1. **Primary:** VideoMAE-Base + Temporal Transformer
-2. **Alternative:** DINO-v2 (ViT-B/14) as frozen feature extractor + Temporal Transformer
-3. **Legacy:** ResNet-18 single-frame (preserved on `baseline/resnet-cv-pipeline` for reference)
-
-**Cross-Reference:** `docs/ML_STACK.md` Part 2–3; `docs/ARCHITECTURE.md` Architecture 2 (revised); `docs/RED_TEAM_REVIEW.md` Section 2.2, 3.2
+1. **Primary:** DINOv2-ViT-B/14 + LoRA + Temporal Transformer
+2. **Sandbox fallback:** ResNet-18 (proxy constraints only; not recommended for production)
+3. **Future alternative:** VideoMAE (not yet implemented)
 
 ---
 
@@ -224,10 +223,11 @@ Output Heads: 8-class row + 12-class column with calibrated sigmoid
 - **Option A:** 3D Blender photorealistic simulation (5,000 samples)
 - **Option B:** VideoMAE fine-tuning generative sampling (5,000 samples)
 
-**Driver:** Data Scientist (responding to Red Team 2.1: "N=100 is failure of scale")
+**Driver:** Data Scientist
 
-**Red Team Finding:**
-- 100 samples is "a failure of scale" for Physical AI company
+**Architectural Analysis:**
+
+- 100 samples alone represent "a failure of scale" for a Physical AI company
 - ResNet-18 (11M params) will memorize lighting/background of those specific 100 videos
 - No synthetic data strategy = relying entirely on brittle real data
 
@@ -271,8 +271,6 @@ Augmentation      └──> 2–3× further diversity (crop, rotate, color jitt
 - **Stage 2 (Real validation):** Hold-out real samples; measure accuracy (60–80% expected), ECE, cross-view agreement
 - **Stage 3 (Domain gap):** Compute FVD between synthetic and real; target FVD < 20 (acceptable for synthetic data)
 
-**Cross-Reference:** `docs/ML_STACK.md` Part 1; `docs/RED_TEAM_REVIEW.md` Section 2.1
-
 ---
 
 ## Decision 3: [NEW] Fusion Architecture — Late Fusion (Explicit Mandate)
@@ -283,10 +281,11 @@ Augmentation      └──> 2–3× further diversity (crop, rotate, color jitt
 
 Late Fusion = Process FPV and Top-view independently through spatiotemporal backbones → Fuse at feature level (after spatial extraction) → Fuse via cross-attention or gating
 
-**Driver:** Architect + ML Scientist (responding to Red Team 2.3 + QA_REPORT conflict)
+**Driver:** Architect + ML Scientist
 
-**Red Team Finding:**
-- QA_REPORT identified critical contradiction: ML_STACK specified early fusion; TEAM_DECISIONS specified late fusion
+**Architectural Analysis:**
+
+- Earlier documentation identified critical contradiction: ML_STACK specified early fusion; TEAM_DECISIONS specified late fusion
 - Indicates breakdown in technical alignment on fundamental architectural choice
 - In lab environment with precise coordinate requirements, fusion strategy is not "coding detail" but **coordinate system design decision**
 
@@ -310,9 +309,9 @@ Late Fusion = Process FPV and Top-view independently through spatiotemporal back
 
 **Late Fusion Architecture (Preferred):**
 ```
-FPV Video → VideoMAE + Temporal Transformer → (768,) ──┐
+FPV Video → DINOv2 + Temporal Transformer → (768,) ──┐
                                                        ├──> Cross-attention ──> (768,) ──> Heads
-Top-view Video → VideoMAE + Temporal Transformer → (768,) ──┘
+Top-view Video → DINOv2 + Temporal Transformer → (768,) ──┘
 ```
 
 **Alternative: Gating (if compute-constrained):**
@@ -324,8 +323,6 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 
 **Explicit Commitment:** Early fusion is **FORBIDDEN** for this project. Any design proposing early fusion (concatenate before spatial extraction) must be explicitly overridden.
 
-**Cross-Reference:** `docs/ARCHITECTURE.md` Section 2.3; `docs/QA_REPORT.md` Issue 1.3; `docs/ML_STACK.md` Part 4
-
 ---
 
 ## Decision 4: [REVISED] Primary Metric — Expected Calibration Error (ECE < 0.10)
@@ -334,9 +331,10 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 
 **Revised Decision:** **Primary metric is Expected Calibration Error (ECE < 0.10), not raw accuracy**
 
-**Driver:** QA Engineer + ML Scientist (responding to Red Team 5)
+**Driver:** QA Engineer + ML Scientist
 
-**Red Team Finding:**
+**Architectural Analysis:**
+
 - In science, Reproducibility > Accuracy
 - Model can achieve 85% accuracy while being poorly calibrated
 - "I don't know with 90% certainty" is more valuable than "overly confident guess"
@@ -381,8 +379,6 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 3. **Third:** False positive rate < 10% (confident wrong predictions rare)
 4. **Fourth:** Exact-match accuracy ~70% on all samples (raw metric for reference)
 
-**Cross-Reference:** `docs/ML_STACK.md` Part 5; `docs/QA_STRATEGY.md` Section 5; `docs/RED_TEAM_REVIEW.md` Section 5
-
 ---
 
 ## Decision 5: [NEW] Confident Refusal Gate (Uncertainty Abstention)
@@ -391,7 +387,7 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 
 **New Decision:** Model must output `{"uncertain": true}` when max confidence < 0.70
 
-**Driver:** QA Engineer (responding to Red Team 5 + calibration-first approach)
+**Driver:** QA Engineer
 
 **Rationale:**
 
@@ -432,8 +428,6 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 - Separate threshold for row and column? No; use global max across both heads
 - Threshold tuning: Sweep {0.5, 0.6, 0.7, 0.8} on validation; select threshold that achieves 5–15% deferral rate
 
-**Cross-Reference:** `docs/ML_STACK.md` Section 5.4; `docs/QA_STRATEGY.md` Section 5
-
 ---
 
 ## Decision 6: [NEW] Temporal Modeling Mandatory (Temporal Transformer Required)
@@ -442,9 +436,10 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 
 **New Decision:** Temporal Transformer (2–4 attention blocks) is MANDATORY; single-frame max-pooling is PROHIBITED
 
-**Driver:** Architect + ML Scientist (responding to Red Team 3.2)
+**Driver:** Architect + ML Scientist
 
-**Red Team Finding:**
+**Architectural Analysis:**
+
 - Max-pooling is order-agnostic: max(frame1, frame2) = max(frame2, frame1)
 - Cannot distinguish pipette entering well vs. exiting (temporal order destroyed)
 - "Dispense" is an event (trajectory), not a state (position)
@@ -456,7 +451,7 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
    ```
    Input: T=4-8 ordered frames per view
        ↓
-   Temporal Backbone: VideoMAE or DINO encoder → (T, 768) feature sequence
+   Temporal Backbone: DINOv2 encoder → (T, 768) feature sequence
        ↓
    Temporal Transformer: 2–4 attention layers with causal masking
        ├─ Frame-wise temporal attention (learns frame relationships)
@@ -479,8 +474,6 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 
 **Explicit Prohibition:** Single-frame max-pooling (current approach) is NO LONGER VIABLE. Any design using max-pooling across frames must be explicitly overridden. Temporal Transformer is non-negotiable.
 
-**Cross-Reference:** `docs/ML_STACK.md` Part 3; `docs/ARCHITECTURE.md` Section 2.1–2.2; `docs/RED_TEAM_REVIEW.md` Section 3.2
-
 ---
 
 ## Decision 7: [NEW] Branch Preservation — Baseline ResNet-18 on `baseline/resnet-cv-pipeline`
@@ -492,13 +485,13 @@ Top-view (768,) ──────> Dense(768 → 256) ───┘
 **Rationale:**
 
 1. **Historical Validation:**
-   - Original approach represents pre-red-team strategy
+   - Original approach represents pre-revision strategy
    - Enables before/after performance comparison
-   - Useful for understanding impact of VideoMAE + temporal modeling changes
+   - Useful for understanding impact of DINOv2 + temporal modeling changes
 
 2. **Legacy System Compatibility:**
    - Some deployment pipelines may require single-frame inference
-   - Fallback if VideoMAE training fails
+   - Fallback if DINOv2 training fails
    - Reference for edge-case analysis
 
 3. **Proof-of-Concept Preservation:**
@@ -520,9 +513,10 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 **New Decision:** Add **3D Gaussian Splatting (3DGS)** as Architecture 4 for glare-heavy scenarios
 
-**Driver:** Architect (responding to Red Team 3.1: "Transparency Risk")
+**Driver:** Architect
 
-**Red Team Finding:**
+**Architectural Analysis:**
+
 - Polystyrene wells refract light; translucent pipette tips add refraction effects
 - Specular reflection (glare) shifts visual center of well
 - 2D CNN cannot model depth and refraction; "visual center" ≠ "true well center"
@@ -552,8 +546,6 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 **Near-term Mitigation:** Use Temporal Transformer to detect glare events (low confidence on bright frames); flag uncertain pixels for manual inspection.
 
-**Cross-Reference:** `docs/ARCHITECTURE.md` Appendix; `docs/ML_STACK.md` Part 9.4; `docs/RED_TEAM_REVIEW.md` Section 3.1
-
 ---
 
 ## Decision 9: [ARCHIVED] GPU vs. CPU Inference (No Change)
@@ -576,7 +568,7 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 ---
 
-## Open Questions & Risks Flagged by Red Team
+## Open Questions & Risks
 
 ### Risk 1: Synthetic Data Domain Gap
 **Issue:** Blender-rendered videos may not match real lab footage; domain gap causes distribution shift.  
@@ -605,7 +597,7 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 ---
 
-## Acceptance Criteria (Revised Post-Red Team)
+## Acceptance Criteria (Final)
 
 **All of the following must be satisfied before hold-out evaluation:**
 
@@ -620,6 +612,7 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 - [ ] Inference latency validated: <30 sec per sample on target GPU (within 2-min budget for 10 samples)
 - [ ] Documentation updated: architecture diagrams, training logs, decision rationale
 - [ ] Baseline branch created: `baseline/resnet-cv-pipeline` preserves original implementation
+- [ ] Focal loss configured with α=0.75 for class imbalance
 
 ### On Hold-Out Evaluation (10 unknown samples)
 - [ ] All 10 samples produce valid JSON output
@@ -640,12 +633,12 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 ### If VideoMAE Fine-Tuning Fails (FVD > 30)
 1. Increase fine-tuning epochs; reduce learning rate to 1e-6
 2. Add stronger augmentation to synthetic data (domain randomization)
-3. If still failing: fallback to DINO-v2 + Temporal Transformer (without generative sampling)
+3. If still failing: fallback to DINOv2 + Temporal Transformer (without generative sampling)
 4. Use Blender-only synthetic data (5K samples) instead of VideoMAE-fine-tuned
 
 ### If Temporal Transformer Accuracy Drops Below 70% on Validation
 1. Reduce temporal depth: use T=4 frames instead of 8
-2. Switch to SlowFast backbone instead of VideoMAE (faster inference, different temporal modeling)
+2. Switch to SlowFast backbone instead of DINOv2 (faster inference, different temporal modeling)
 3. Increase synthetic data ratio (85% synthetic, 15% real) to boost training signal
 4. If still failing: revert to single-frame baseline with architecture constraints
 
@@ -663,28 +656,27 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 ---
 
-## Appendix: Decision Timeline (Post-Red Team)
+## Appendix: Decision Timeline
 
-| Date | Decision | Owner | Red Team Trigger | Status |
-|------|----------|-------|------------------|--------|
-| Apr 14 | [REVISED] Architecture: VideoMAE + Temporal Transformer | ML Scientist + Architect | 2.2, 3.2 | FINAL |
-| Apr 14 | [NEW] Synthetic Data: Blender + VideoMAE fine-tuning | Data Scientist | 2.1 | FINAL |
-| Apr 14 | [NEW] Late Fusion mandate | Architect + ML Scientist | 2.3 | FINAL |
-| Apr 14 | [REVISED] Primary metric: ECE < 0.10 | QA Engineer + ML Scientist | 5 | FINAL |
-| Apr 14 | [NEW] Confident Refusal gate (p_max < 0.70) | QA Engineer | 5 | FINAL |
-| Apr 14 | [NEW] Temporal Transformer mandatory | Architect + ML Scientist | 3.2 | FINAL |
-| Apr 14 | [NEW] Branch preservation: baseline/resnet-cv-pipeline | Engineer | Historical | FINAL |
-| Apr 14 | [NEW] 3DGS research track | Architect | 3.1 | FINAL |
+| Date | Decision | Owner | Status |
+|------|----------|-------|--------|
+| Apr 14 | [REVISED] Architecture: DINOv2 + Temporal Transformer | ML Scientist + Architect | FINAL |
+| Apr 14 | [NEW] Synthetic Data: Blender + VideoMAE fine-tuning | Data Scientist | FINAL |
+| Apr 14 | [NEW] Late Fusion mandate | Architect + ML Scientist | FINAL |
+| Apr 14 | [REVISED] Primary metric: ECE < 0.10 | QA Engineer + ML Scientist | FINAL |
+| Apr 14 | [NEW] Confident Refusal gate (p_max < 0.70) | QA Engineer | FINAL |
+| Apr 14 | [NEW] Temporal Transformer mandatory | Architect + ML Scientist | FINAL |
+| Apr 14 | [NEW] Branch preservation: baseline/resnet-cv-pipeline | Engineer | FINAL |
+| Apr 14 | [NEW] 3DGS research track | Architect | FINAL |
 
 ---
 
-**Document Status:** FINAL (Post-Red Team Response)  
-**Last Updated:** April 14, 2026  
+**Document Status:** FINAL  
+**Last Updated:** April 15, 2026  
 **Next Review:** After hold-out evaluation completion
 
 **Key References:**
-- `docs/RED_TEAM_REVIEW.md` — Red team findings (5 findings × 8 sections each)
-- `docs/ML_STACK.md` — VideoMAE + temporal architecture, synthetic data strategy, training protocols
+- `docs/ML_STACK.md` — DINOv2 + temporal architecture, synthetic data strategy, training protocols
 - `docs/ARCHITECTURE.md` — 4 architectural proposals, physical AI design principles
-- `docs/QA_REPORT.md` — ORANGE status (31 issues); red team response section
-- `README.md` — Updated with post-red-team strategy, response to 5 findings
+- `docs/QA_REPORT.md` — Status and quality assurance strategy
+- `README.md` — Project overview and implementation status

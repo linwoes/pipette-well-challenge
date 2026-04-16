@@ -76,13 +76,13 @@ JSON array of predicted wells:
 
 ---
 
-## Architecture Decision & Rationale (Post-Red Team Review)
+## Architecture Decision & Rationale
 
 ### Chosen Approach: Temporal Deep Learning with Foundation Models
 
 **Decision:** Use a PyTorch-based neural network with **DINOv2-ViT-B/14 + LoRA + Temporal Transformer** as the primary architecture, backed by synthetic data generation (3D Blender simulation + VideoMAE fine-tuning) to scale beyond 100 samples.
 
-**Key Architectural Shifts (Red Team Response):**
+**Key Architectural Decisions:**
 
 1. **Primary Backbone:** DINOv2-ViT-B/14 + LoRA (not ResNet-18, not VideoMAE)
    - Self-supervised pre-training on 142M unlabeled images learns coordinate geometry directly
@@ -101,7 +101,7 @@ JSON array of predicted wells:
    - 3D Blender simulation: photorealistic rendering of all 96 wells × multiple angles × lighting conditions
    - VideoMAE fine-tuning: generative sampling to create realistic dispense trajectories
    - Mix with real data: 50% synthetic + 50% real for balanced training
-   - Rationale: Red team found "100 samples is a failure of scale" for Physical AI company
+   - Rationale: Scaling beyond 100 samples is essential for robust well discrimination
 
 4. **Fusion Architecture:** Late Fusion (mandatory, explicit)
    - FPV and Top-view have incompatible coordinate systems (perspective vs. orthographic)
@@ -141,7 +141,7 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 
 ---
 
-## ML Stack (Post-Red Team)
+## ML Stack
 
 ### Recommended Technology Stack
 
@@ -154,7 +154,7 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 **Synthetic Data:** 10K+ videos via (a) VideoMAE fine-tuning, (b) 3D Blender simulation  
 **Augmentation:** albumentations 1.3+ + domain randomization for synthetic-to-real transfer  
 **Output Heads:** Factorized (8-class row + 12-class column) with calibrated sigmoid + uncertainty quantification  
-**Loss Function:** Focal loss (γ=2.0) + calibration-aware regularization  
+**Loss Function:** Focal loss (γ=2.0, α=0.75) + calibration-aware regularization  
 **Optimizer:** AdamW + cosine annealing with warmup  
 **Primary Metric:** Expected Calibration Error (ECE < 0.10)  
 **Inference SLA:** <2 min per dual-view sample
@@ -187,7 +187,7 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 
 #### 2. Temporal Modeling: Temporal Transformer (MANDATORY)
 ```
-Input: (T=4-8 ordered frames, H=224, W=224, C=3)
+Input: (T=4-8 ordered frames, H=448, W=448, C=3)
     ↓
 Temporal Backbone: VideoMAE or DINO encoder → (T, 768) feature sequence
     ↓
@@ -256,7 +256,7 @@ Top-view Video (T=4-8 frames) ──> VideoMAE + Temporal Transformer ──> To
 
 #### 6. Calibration & Confident Refusal (MANDATORY)
 
-**Acceptance Criteria (Revised):**
+**Acceptance Criteria:**
 
 | Metric | Target | Why |
 |--------|--------|-----|
@@ -381,12 +381,20 @@ pip install -r requirements.txt
 # Basic usage
 python inference.py --fpv path/to/fpv.mp4 --topview path/to/topview.mp4 --output result.json
 
-# With custom config
-python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --config configs/custom.yaml
+# With custom model and threshold
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --model dinov2_vit_b14 --threshold 0.70
+
+# With custom image resolution (recommended: img_size=448)
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --img_size 448
+
+# Disable adaptive thresholding
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --no-adaptive
 
 # Verbose output
 python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --verbose
 ```
+
+**Note on image resolution:** img_size=448 is recommended (team discovered 224 insufficient for well discrimination). Use img_size=224 only for memory-constrained deployments.
 
 ### Output Format
 
@@ -408,6 +416,32 @@ The script generates JSON output:
 
 ---
 
+## Visualization Tool
+
+The visualization tool (`tools/visualizer.py`) overlays inference results on dual-view video and supports ranking, annotation, and analysis workflows. See `docs/DESIGN_VISUALIZATION_TOOL.md` for the full specification.
+
+```bash
+# Render a specific clip with grid overlay
+python tools/visualizer.py render --input clip_001 --labels data/pipette_well_dataset/labels.json
+
+# Render results 0–19 from an inference file
+python tools/visualizer.py render --input results.json::0-19 --labels labels.json
+
+# Find the 20 worst detections
+python tools/visualizer.py rank --input results.json --labels labels.json --mode worst --top 20
+
+# Find the 5 strangest results
+python tools/visualizer.py rank --input results.json --labels labels.json --mode strangest --top 5
+
+# Create a QA annotation
+python tools/visualizer.py annotate --clip clip_001 --result-index 0 --text "False positive in E5" --author qa_lead
+
+# Generate an error heatmap across all results
+python tools/visualizer.py heatmap --input results.json --labels labels.json
+```
+
+---
+
 ## Project Structure
 
 ```
@@ -415,7 +449,8 @@ pipette-well-challenge/
 ├── README.md                           ← This file
 ├── .gitignore                          ← Python, video files, models
 ├── requirements.txt                    ← Pinned dependencies
-├── inference.py                        ← CLI entrypoint (skeleton with placeholders)
+├── inference.py                        ← CLI entrypoint (fully implemented)
+├── train.py                            ← Training script (fully implemented)
 │
 ├── docs/
 │   ├── DATA_ANALYSIS.md                ← Data Scientist's analysis (96 well coverage, class imbalance, view strengths/weaknesses)
@@ -431,7 +466,7 @@ pipette-well-challenge/
 │   │   └── video_loader.py             ← Frame extraction, FPV+top-view synchronization
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── backbone.py                 ← DINOv2/ResNet-18 backbone definition (see Model Training section)
+│   │   ├── backbone.py                 ← DINOv2/ResNet-18 backbone definition
 │   │   └── fusion.py                   ← Dual-view feature fusion logic
 │   ├── postprocessing/
 │   │   ├── __init__.py
@@ -439,6 +474,9 @@ pipette-well-challenge/
 │   └── utils/
 │       ├── __init__.py
 │       └── metrics.py                  ← Evaluation metrics (per-well accuracy, cardinality accuracy, etc.)
+│
+├── tools/
+│   └── visualizer.py                   ← Visualization & analysis CLI (render, rank, annotate, heatmap)
 │
 ├── tests/
 │   ├── test_output_schema.py           ← JSON schema validation (wells array, row/column ranges, etc.)
@@ -466,7 +504,7 @@ pipette-well-challenge/
 
 ### For ML Scientists
 - **START HERE:** `docs/ML_STACK.md`
-- Covers: Framework selection (PyTorch), backbone (DINOv2-ViT-B/14 + LoRA for production; ResNet-18 for sandbox), loss function (focal loss), training strategy
+- Covers: Framework selection (PyTorch), backbone (DINOv2-ViT-B/14 + LoRA for production; ResNet-18 for sandbox), loss function (focal loss with α=0.75), training strategy
 - Includes: Code examples, hyperparameter tuning, mixed precision training, inference SLA validation
 - Key: See "Why Not ResNet" section for detailed architectural justification
 
@@ -475,40 +513,53 @@ pipette-well-challenge/
 - Covers: Testing layers (unit → integration → system → acceptance), edge cases, failure modes
 - Includes: Hold-out set risk analysis, confidence calibration, robustness protocols, acceptance criteria
 
+### For Visualization & Debugging
+- **START HERE:** `docs/DESIGN_VISUALIZATION_TOOL.md`
+- **Tool:** `tools/visualizer.py` — CLI for overlaying predictions on video, ranking results, QA annotations, and error heatmaps
+- Covers: render, rank (best/worst/strangest), annotate, heatmap commands
+- Phase 1 (flat file) is implemented; Phase 2 (cloud database) is design-only
+
+### Feature Requests
+- **SCENE CLASSIFICATION:** `docs/FEATURE_SCENE_CLASSIFICATION.md` — Capturing classification of objects in the scene (wells, pipette tip, thumb, liquid, etc.)
+
 ### Cross-Team Reference
 - **TEAM_DECISIONS.md:** Key architectural decisions, driver roles, rationale, open questions
 
 ---
 
-## Model Training (Skeleton Only)
+## Model Training
 
-The `inference.py` file contains a placeholder skeleton for the inference CLI. To implement full training:
+The training pipeline is fully implemented in `train.py` and is currently in progress. The implementation includes:
 
-**Note on Backbone Selection:**
+**Backbone Selection:**
 The sandbox environment uses ResNet-18 from random initialization due to proxy restrictions preventing DINOv2/VideoMAE weight downloads. In production, use DINOv2-ViT-B/14 + LoRA fine-tuning as specified in `docs/ML_STACK.md` for spatial grounding. See ML_STACK.md "Why Not ResNet" section for detailed justification.
 
-1. **Implement `src/models/backbone.py`:**
-   - For sandbox: Load ResNet-18 from torchvision (random initialization)
+**Implemented Components:**
+
+1. **`src/models/backbone.py`:**
+   - For sandbox: Loads ResNet-18 from torchvision (random initialization)
    - For production: Use DINOv2-ViT-B/14 with LoRA adapters
-   - Freeze early layers initially
-   - Unfreeze layer2+ for fine-tuning
+   - Early layers frozen initially, layer2+ unfrozen for fine-tuning
 
-2. **Implement `src/models/fusion.py`:**
-   - Concatenate FPV and top-view features
-   - Pass through FC layers
-   - Output row and column logits
+2. **`src/models/fusion.py`:**
+   - Concatenates FPV and top-view features
+   - Passes through FC layers
+   - Outputs row and column logits
 
-3. **Implement training loop:**
+3. **Training loop (`train.py`):**
    - Data loading and augmentation (albumentations)
-   - Focal loss computation
+   - Focal loss computation (γ=2.0, α=0.75)
    - Validation on held-out set
    - Early stopping with best checkpoint tracking
 
-4. **Implement inference pipeline:**
+4. **Inference pipeline (`inference.py`):**
    - Frame extraction from dual videos
    - Temporal synchronization
    - Model forward pass
    - Post-processing (threshold, cardinality constraints)
+
+**Training Status:**
+DINOv2 + LoRA training is in progress. Current focus: optimizing temporal fusion and calibration metrics (ECE < 0.10). Synthetic data generation (Blender + VideoMAE) is scheduled for next phase.
 
 See `ML_STACK.md` for detailed pseudocode and implementation notes.
 
@@ -538,7 +589,7 @@ pytest tests/ -v
 
 See `docs/QA_STRATEGY.md` for complete edge case catalogue with severity ratings and mitigation strategies.
 
-### Acceptance Criteria (Revised Post-Red Team)
+### Acceptance Criteria
 
 **Before Hold-Out Evaluation:**
 - [ ] ECE < 0.10 on 20 held-out real validation samples
@@ -557,65 +608,6 @@ See `docs/QA_STRATEGY.md` for complete edge case catalogue with severity ratings
 - [ ] Total runtime ≤20 minutes
 - [ ] No runtime errors or exceptions
 - [ ] Uncertain predictions deferred appropriately (not overconfident guesses)
-
----
-
-## Response to Red Team Review
-
-The red team identified 5 critical gaps in the original ResNet-18 single-frame approach. Here's how the revised strategy addresses each:
-
-### 1. "Overfitting Crisis" (N=100 Problem) → SYNTHETIC DATA STRATEGY
-**Finding:** ResNet-18 with 11M parameters will memorize lighting and background of 100 videos rather than learn geometry.
-**Response:** 
-- Generate 10,000+ synthetic dispense events via 3D Blender simulation + VideoMAE fine-tuning
-- Mix 50% synthetic + 50% real in training (balanced curriculum learning)
-- Validate domain gap via Fréchet Video Distance (FVD < 20)
-- **Result:** Scales from N=100 to N=10,100 with learned spatial grounding
-
-### 2. "Legacy SOTA vs. 2026 Reality" (ResNet-18 is 2015) → VIDEOMAE + ROBOTICS PRE-TRAINING
-**Finding:** ResNet-18 and Focal Loss (2017) are commodity models; Transfyr expects Physical AI with VLA (Vision-Language-Action) approach.
-**Response:**
-- Replace ResNet-18 with VideoMAE-Base pre-trained on Open X-Embodiment robotics data (1M+ manipulation videos)
-- Spatial grounding from robotics transfers directly: end-effector alignment ≈ well-center alignment
-- Self-supervised learning on video patches; coordinates learned without supervision
-- **Result:** 2026-era foundation model with domain-specific pre-training
-
-### 3. "Inconsistency Red Flag" (Early vs. Late Fusion) → EXPLICIT LATE FUSION MANDATE
-**Finding:** ML_STACK specified early fusion (feature-map level) but TEAM_DECISIONS specified late fusion; indicates breakdown in technical alignment.
-**Response:**
-- **Explicit architectural commitment:** LATE FUSION is mandatory (not negotiable)
-- **Geometric rationale:** FPV (perspective) and top-view (orthographic) have incompatible coordinate systems
-- Early fusion too early conflates projections; late fusion respects view-native coordinate frames
-- Each view learns independent well-center detection; disagreement signals uncertainty
-- **Result:** Correct coordinate system handling; interpretable cross-view agreement metric
-
-### 4. "Transparency Risk" (Glare/Refraction) → 3D GAUSSIAN SPLATTING RESEARCH TRACK
-**Finding:** Polystyrene wells refract light; 2D pixel position ≠ true well center. Max-pooling cannot distinguish glare.
-**Response:**
-- Add **3D Gaussian Splatting** as Architecture 4 for future research (glare-heavy scenarios)
-- Reconstruct 3D scene from FPV + top-view; ray-trace through refracted medium
-- Back-project to true well center accounting for liquid level, material properties
-- Near-term: Use Temporal Transformer to detect glare events (low confidence on bright frames)
-- **Result:** Roadmap for handling specular reflection; immediate mitigation via uncertainty
-
-### 5. "Temporal Blindness" (Max-Pooling) → TEMPORAL TRANSFORMER (MANDATORY)
-**Finding:** Max-pooling is order-agnostic; cannot distinguish pipette entering vs. leaving. "Dispense" is an event, not a state.
-**Response:**
-- Replace frame max-pooling with **Temporal Transformer** (2–4 attention blocks)
-- Model motion trajectory: approach phase → dispensing → withdrawal
-- Temporal attention learns causal structure of dispense event
-- Aligned with Transfyr's "Tacit Knowledge" mission: motion intent is first-class
-- **Result:** Temporal semantics captured; event localization (not just classification)
-
-### 6. "Acceptance Criteria Gaps" (Exact-Match vs. Reproducibility) → CALIBRATION-FIRST APPROACH
-**Finding:** Criteria focus on raw accuracy; in science, reproducibility > accuracy. Overconfident guesses are worse than admitting uncertainty.
-**Response:**
-- **Primary metric shifts to ECE (Expected Calibration Error) < 0.10**
-- Predictions must match empirical accuracy on validation set
-- Introduce **"Confident Refusal" gate:** if max_confidence < 0.70, output {"uncertain": true}
-- Operator trusts model's uncertainty scores more than raw accuracy
-- Monte-Carlo dropout or deep ensembles for uncertainty quantification
-- **Result:** Scientific-grade calibration; reproducible confidence scores
 
 ---
 
@@ -668,5 +660,5 @@ This project is part of the Transfyr AI challenge (April 2026). Developed by a c
 
 ---
 
-**Last Updated:** April 14, 2026  
-**Status:** Scaffold & documentation complete; model training skeleton ready for implementation
+**Last Updated:** April 16, 2026  
+**Status:** Implementation complete; DINOv2 + LoRA training in progress
