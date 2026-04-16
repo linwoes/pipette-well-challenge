@@ -123,7 +123,7 @@ class PipetteWellDataset(Dataset):
         # Build augmentation pipeline (only if albumentations available)
         if self.augment:
             self.transform = A.Compose([
-                A.RandomResizedCrop(img_size, img_size, scale=(0.8, 1.0)),
+                A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0)),
                 A.HorizontalFlip(p=0.3),
                 A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, p=0.5),
                 A.GaussianBlur(blur_limit=(3, 5), p=0.2),
@@ -133,7 +133,7 @@ class PipetteWellDataset(Dataset):
             ], is_check_shapes=False)
         elif HAS_ALBUMENTATIONS:
             self.transform = A.Compose([
-                A.Resize(img_size, img_size),
+                A.Resize(height=img_size, width=img_size),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], is_check_shapes=False)
