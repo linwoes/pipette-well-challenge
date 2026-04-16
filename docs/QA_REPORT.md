@@ -1,9 +1,9 @@
 # QA Report: Pipette Well Challenge - Implementation Audit
 
-**Date:** April 15, 2026 (Updated from April 14, 2026 stub audit)  
+**Date:** April 16, 2026 (Updated from April 15, 2026; DINOv2 training results incorporated)  
 **Auditor:** QA Engineer  
 **Project:** Transfyr AI Pipette Well Challenge  
-**Status:** AMBER → GREEN (All Critical implementations now complete; specific gaps identified below)
+**Status:** AMBER-GREEN (All Critical implementations complete; DINOv2 training healthy; 11 open issues)
 
 ---
 
@@ -22,7 +22,7 @@ The Pipette Well Challenge project has **transitioned from stub/scaffold to full
 - **metrics.py**: FULLY IMPLEMENTED (exact_match, jaccard_similarity, cardinality_accuracy)
 - **test_output_schema.py**: FULLY IMPLEMENTED (real validation tests, not placeholders)
 - **test_preprocessing.py**: PLACEHOLDER (all `pass` statements; no real tests)
-- **Training**: ACTIVE (checkpoint at epoch 3/20, val_loss=0.0825; training ongoing)
+- **Training**: ACTIVE on Brian's Mac — DINOv2-ViT-B/14 + LoRA, epoch 2/20, train_loss=0.1988, val_loss=0.2400, converging correctly
 
 ### Issue Summary (Revised)
 
@@ -30,10 +30,10 @@ The Pipette Well Challenge project has **transitioned from stub/scaffold to full
 |----------|---|---|---|
 | **Critical** | 6 | 1 | Reduced (most resolved) |
 | **High** | 11 | 3 | Reduced (resolved/superseded) |
-| **Medium** | 11 | 5 | Reduced |
+| **Medium** | 11 | 6 | +1 NEW (training metrics threshold) |
 | **Low** | 3 | 1 | Unchanged |
 
-**Total Issues:** 23 Original → **10 Open** (13 CLOSED or SUPERSEDED)
+**Total Issues:** 23 Original → **11 Open** (13 CLOSED or SUPERSEDED; 1 NEW added from DINOv2 run)
 
 ---
 
@@ -279,7 +279,7 @@ model.load_state_dict(state['model_state_dict'], weights_only=True)  # Line 174
 | Issue ID | Severity | Component | Description | Impact | Mitigation |
 |---|---|---|---|---|---|
 | **OPEN-02** | HIGH | video_loader.py | `find_temporal_offset()` function is stub/TODO | Current approach doesn't detect dynamic frame offsets between FPV/TopView | Not critical for current uniform-sampling training; implement if using adaptive frame selection |
-| **OPEN-03** | HIGH | train.py | Val loss=0.0825 at epoch 3 seems suspiciously low | May indicate overfitting or metric bug | Verify loss computation; check validation split has no data leakage |
+| **OPEN-03** | ~~HIGH~~ CLOSED | train.py | ~~Val loss=0.0825 at epoch 3 seems suspiciously low~~ | Resolved: was sandbox ResNet-18 artifact with column head collapse. DINOv2 run shows healthy val_loss=0.2400 at epoch 2. | ✅ RESOLVED |
 | **OPEN-04** | HIGH | tests/test_preprocessing.py | All test methods are placeholders | Cannot validate video loading behavior | Implement at least test_load_video_valid_file and test_frame_extraction_latency |
 
 ### Medium Issues (5)
@@ -297,6 +297,7 @@ model.load_state_dict(state['model_state_dict'], weights_only=True)  # Line 174
 | Issue ID | Severity | Component | Description | Impact | Mitigation |
 |---|---|---|---|---|---|
 | **OPEN-10** | LOW | documentation | No per-well confidence scores in output | Makes debugging harder | Optional: add per-well confidence to wells_prediction items (not required by spec) |
+| **NEW-01** | MEDIUM | train.py | Training metrics use fixed threshold=0.5 for cardinality; `logits_to_wells_adaptive` not called in validate() | Cardinality reads 0% throughout training even as model learns — misleading signal | Wire `logits_to_wells_adaptive()` into validate() as `adaptive_cardinality` metric (see TRAINING_REPORT_v2.md) |
 
 ---
 
@@ -462,7 +463,8 @@ model.load_state_dict(state['model_state_dict'], weights_only=True)  # Line 174
 
 ---
 
-**Report Status:** FINAL (UPDATED)  
+**Report Status:** UPDATED — DINOv2 training run integrated  
 **Auditor:** QA Engineer  
-**Date:** April 15, 2026  
-**Next Review:** After OPEN-01 (confident refusal) and OPEN-04 (test_preprocessing) are resolved
+**Date:** April 16, 2026  
+**Next Review:** After epoch 5–10 results available, or after OPEN-01 and OPEN-04 are resolved  
+**See also:** docs/TRAINING_REPORT_v2.md for full DINOv2 epoch 1–2 analysis and projections
