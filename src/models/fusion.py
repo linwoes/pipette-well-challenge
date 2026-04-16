@@ -180,13 +180,15 @@ class DualViewFusion(nn.Module):
             self.backbone_fpv = DINOv2Backbone(
                 use_lora=use_lora,
                 lora_rank=lora_rank,
-                freeze_base=True
+                freeze_base=True,
+                img_size=self.img_size,
             )
             if not shared_backbone:
                 self.backbone_topview = DINOv2Backbone(
                     use_lora=use_lora,
                     lora_rank=lora_rank,
-                    freeze_base=True
+                    freeze_base=True,
+                    img_size=self.img_size,
                 )
             else:
                 self.backbone_topview = None

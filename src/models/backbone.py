@@ -129,6 +129,7 @@ class DINOv2Backbone(nn.Module):
         lora_rank: int = 8,
         lora_alpha: float = 16.0,
         freeze_base: bool = True,
+        img_size: int = 224,
     ):
         """
         Initialize DINOv2 backbone with optional LoRA.
@@ -138,15 +139,19 @@ class DINOv2Backbone(nn.Module):
             lora_rank: LoRA rank (default 8)
             lora_alpha: LoRA scaling factor (default 16.0)
             freeze_base: Freeze base model weights (default True)
+            img_size: Input image size — must be a multiple of 14. The timm
+                      model is created with this size so positional embeddings
+                      are initialised correctly (default 224).
         """
         super().__init__()
         self.use_lora = use_lora
         self.lora_rank = lora_rank
         self.lora_alpha = lora_alpha
+        self.img_size = img_size
         self.d_model = 768  # DINOv2-ViT-B feature dim
 
         # Attempt to load DINOv2 via torch.hub
-        self.model = self._load_dinov2()
+        self.model = self._load_dinov2(img_size)
 
         if self.model is None:
             warnings.warn(
@@ -166,31 +171,37 @@ class DINOv2Backbone(nn.Module):
             if use_lora:
                 self._inject_lora_adapters()
 
-    def _load_dinov2(self) -> Optional[nn.Module]:
+    def _load_dinov2(self, img_size: int = 224) -> Optional[nn.Module]:
         """
         Load DINOv2-ViT-B/14 from torch.hub or timm.
+
+        img_size is passed to timm so positional embeddings are initialised
+        at the correct resolution (timm defaults to 518 otherwise).
 
         Returns:
             Loaded model or None if both fail.
         """
-        # Try torch.hub first
+        # Try torch.hub first (requires Python 3.10+ for type-union syntax in hub code)
         try:
             model = torch.hub.load(
                 'facebookresearch/dinov2',
                 'dinov2_vitb14',
                 pretrained=True
             )
+            _logger.info("Loaded DINOv2 via torch.hub")
             return model
         except Exception as e:
             warnings.warn(f"torch.hub load failed: {e}. Trying timm fallback...")
 
-        # Fallback to timm
+        # Fallback to timm — pass img_size so the model is built for our resolution
         try:
             import timm
             model = timm.create_model(
                 'vit_base_patch14_dinov2.lvd142m',
-                pretrained=False
+                pretrained=True,
+                img_size=img_size,
             )
+            _logger.info(f"Loaded DINOv2 via timm (img_size={img_size})")
             return model
         except Exception as e:
             warnings.warn(f"timm fallback failed: {e}. Will use ResNet18 fallback.")
