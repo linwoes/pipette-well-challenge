@@ -489,6 +489,8 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='Weight decay')
     parser.add_argument('--num_frames', type=int, default=8, help='Frames per video')
+    parser.add_argument('--img_size', type=int, default=224,
+                        help='Input image size. Must be a multiple of 14 for DINOv2 (e.g. 224, 336, 448, 518)')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu)')
     parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
                         help='Backbone architecture (dinov2 or resnet18 for CPU training)')
@@ -512,6 +514,7 @@ def main():
         args.data_dir,
         args.labels,
         num_frames=args.num_frames,
+        img_size=args.img_size,
         augment=True
     )
 
