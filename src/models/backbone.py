@@ -76,12 +76,14 @@ class LoRAAdapter(nn.Module):
     Added to frozen pretrained weights to enable parameter-efficient adaptation.
     """
 
-    def __init__(self, d_model: int, rank: int = 8, lora_alpha: float = 16.0):
+    def __init__(self, in_dim: int, out_dim: int = None, rank: int = 8, lora_alpha: float = 16.0):
         """
         Initialize LoRA adapter.
 
         Args:
-            d_model: Feature dimension (e.g., 768 for DINOv2-ViT-B)
+            in_dim: Input feature dimension (e.g., 768 for DINOv2-ViT-B)
+            out_dim: Output feature dimension. Defaults to in_dim.
+                     Set to 3*in_dim for fused qkv projections.
             rank: Low-rank dimension (default 8)
             lora_alpha: Scaling factor (default 16.0)
         """
@@ -89,25 +91,25 @@ class LoRAAdapter(nn.Module):
         self.rank = rank
         self.lora_alpha = lora_alpha
         self.scaling = lora_alpha / rank
+        out_dim = out_dim if out_dim is not None else in_dim
 
-        # A: project down to rank
-        self.lora_A = nn.Linear(d_model, rank, bias=False)
-        # B: project back to d_model
-        self.lora_B = nn.Linear(rank, d_model, bias=False)
+        # A: project down to rank; B: project up to out_dim
+        self.lora_A = nn.Linear(in_dim, rank, bias=False)
+        self.lora_B = nn.Linear(rank, out_dim, bias=False)
 
-        # Initialize A with Kaiming normal, B with zeros
+        # Initialize A with Kaiming normal, B with zeros (no-op at init)
         nn.init.kaiming_normal_(self.lora_A.weight, mode='fan_in', nonlinearity='linear')
         nn.init.zeros_(self.lora_B.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
-        Forward pass: x + B(A(x)) * scaling
+        Forward pass: B(A(x)) * scaling
 
         Args:
-            x: (... , d_model)
+            x: (..., in_dim)
 
         Returns:
-            LoRA output: (... , d_model)
+            LoRA delta: (..., out_dim)  — added to frozen projection output
         """
         return self.lora_B(self.lora_A(x)) * self.scaling
 
@@ -225,14 +227,23 @@ class DINOv2Backbone(nn.Module):
                 if hasattr(block, 'attn'):
                     attn = block.attn
 
-                    # Create LoRA adapters for Q and V
+                    # Detect layout to set correct adapter output dimension:
+                    #   q_proj/v_proj style → out_dim = d_model (768)
+                    #   qkv fused style     → out_dim = 3 * d_model (2304)
+                    if hasattr(attn, 'qkv'):
+                        adapter_out_dim = 3 * self.d_model
+                    else:
+                        adapter_out_dim = self.d_model
+
                     q_adapter = LoRAAdapter(
-                        self.d_model,
+                        in_dim=self.d_model,
+                        out_dim=adapter_out_dim,
                         rank=self.lora_rank,
                         lora_alpha=self.lora_alpha
                     )
                     v_adapter = LoRAAdapter(
-                        self.d_model,
+                        in_dim=self.d_model,
+                        out_dim=adapter_out_dim,
                         rank=self.lora_rank,
                         lora_alpha=self.lora_alpha
                     )
@@ -240,7 +251,7 @@ class DINOv2Backbone(nn.Module):
                     self.lora_adapters[f'block_{block_idx}_q'] = q_adapter
                     self.lora_adapters[f'block_{block_idx}_v'] = v_adapter
 
-                    # Wrap original q_proj and v_proj to add LoRA output
+                    # Wrap attention projections with LoRA
                     self._wrap_attn_projection(block, attn, block_idx)
 
     def _wrap_attn_projection(self, block, attn, block_idx: int):
