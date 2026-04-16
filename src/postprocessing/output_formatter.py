@@ -146,3 +146,51 @@ def _deduplicate_wells(wells: List[Dict]) -> List[Dict]:
 def _sort_wells(wells: List[Dict]) -> List[Dict]:
     """Sort wells in canonical order (A1, A2, ..., H12)."""
     return sorted(wells, key=lambda w: (ord(w['well_row']) - ord('A'), w['well_column']))
+
+
+def logits_to_wells_adaptive(
+    row_logits: np.ndarray,
+    col_logits: np.ndarray,
+    max_wells: int = 12,
+) -> List[Dict]:
+    """
+    Adaptive well prediction using outer-product probability map.
+
+    Instead of a fixed sigmoid threshold (which collapses to 0 or 96 predictions
+    depending on model confidence), this uses a relative threshold:
+      - Compute the full 8×12 outer-product probability map
+      - Threshold at 50% of the map's maximum value
+      - If that yields > max_wells, fall back to argmax (top-1)
+      - Guarantees at least 1 prediction; caps at max_wells
+
+    This resolves the column-head collapse failure mode where fixed threshold=0.5
+    produces 0 or 70+ predictions instead of 1, 8, or 12.
+
+    Args:
+        row_logits: (8,) logits for rows A-H
+        col_logits: (12,) logits for columns 1-12
+        max_wells: cap on predictions before falling back to top-1 (default 12)
+
+    Returns:
+        List of well dicts with well_row and well_column
+    """
+    row_probs = _sigmoid(row_logits)
+    col_probs = _sigmoid(col_logits)
+
+    # Outer product: (8, 12) joint probability map
+    well_map = np.outer(row_probs, col_probs)
+
+    # Adaptive threshold: 50% of peak
+    adaptive_thresh = well_map.max() * 0.5
+    mask = well_map >= max(adaptive_thresh, 0.05)  # floor at 5% to avoid no-op
+
+    if mask.sum() == 0 or mask.sum() > max_wells:
+        # Fallback: top-1 argmax
+        idx = np.unravel_index(well_map.argmax(), well_map.shape)
+        wells = [{'well_row': 'ABCDEFGH'[idx[0]], 'well_column': int(idx[1] + 1)}]
+    else:
+        rows, cols = np.where(mask)
+        wells = [{'well_row': 'ABCDEFGH'[r], 'well_column': int(c + 1)}
+                 for r, c in sorted(zip(rows, cols))]
+
+    return _sort_wells(wells)

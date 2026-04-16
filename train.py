@@ -263,6 +263,7 @@ class Trainer:
         warmup_epochs: int = 5,
         patience: int = 10,
         grad_clip: float = 1.0,
+        focal_alpha: float = 0.75,
     ):
         """Initialize trainer."""
         self.model = model
@@ -274,6 +275,7 @@ class Trainer:
         self.warmup_epochs = warmup_epochs
         self.patience = patience
         self.grad_clip = grad_clip
+        self.focal_alpha = focal_alpha
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -284,7 +286,7 @@ class Trainer:
         self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
         # Loss function
-        self.criterion = WellDetectionLoss(gamma=2.0, alpha=0.25)
+        self.criterion = WellDetectionLoss(gamma=2.0, alpha=focal_alpha)
 
         # LR scheduler with warmup
         self.scheduler = self._build_scheduler(epochs, warmup_epochs)
@@ -490,6 +492,7 @@ def main():
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu)')
     parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
                         help='Backbone architecture (dinov2 or resnet18 for CPU training)')
+    parser.add_argument('--focal_alpha', type=float, default=0.75, help='Focal loss alpha — weight for positive class (default 0.75; was 0.25)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume training from')
@@ -549,6 +552,7 @@ def main():
         epochs=args.epochs,
         lr=args.lr,
         weight_decay=args.weight_decay,
+        focal_alpha=args.focal_alpha,
     )
 
     # Resume from checkpoint if specified
