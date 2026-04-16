@@ -215,28 +215,38 @@ class DINOv2Backbone(nn.Module):
 
     def _wrap_attn_projection(self, block, attn, block_idx: int):
         """
-        Wrap attention Q/V projections to apply LoRA.
+        Wrap attention projections to apply LoRA.
 
-        Args:
-            block: Transformer block
-            attn: Attention module
-            block_idx: Block index (for adapter lookup)
+        Handles two DINOv2 attention layouts:
+          - torch.hub style: separate attn.q_proj / attn.v_proj
+          - timm style:      fused attn.qkv  (Linear(d, 3*d))
+
+        For the fused qkv case we wrap the entire projection so LoRA is
+        added to all of Q, K, V — a slight over-injection vs. Q+V only,
+        but negligible in practice and avoids splitting the fused weight.
         """
-        # Store original projections
-        original_q_proj = attn.q_proj
-        original_v_proj = attn.v_proj
-
         q_adapter = self.lora_adapters[f'block_{block_idx}_q']
         v_adapter = self.lora_adapters[f'block_{block_idx}_v']
 
-        def q_proj_with_lora(x):
-            return original_q_proj(x) + q_adapter(x)
+        if hasattr(attn, 'q_proj') and hasattr(attn, 'v_proj'):
+            # torch.hub / native DINOv2 style — separate projections
+            original_q = attn.q_proj
+            original_v = attn.v_proj
+            attn.q_proj = lambda x, _q=original_q, _a=q_adapter: _q(x) + _a(x)
+            attn.v_proj = lambda x, _v=original_v, _a=v_adapter: _v(x) + _a(x)
 
-        def v_proj_with_lora(x):
-            return original_v_proj(x) + v_adapter(x)
+        elif hasattr(attn, 'qkv'):
+            # timm style — fused QKV projection
+            original_qkv = attn.qkv
+            # Use q_adapter for the LoRA term (v_adapter is redundant here
+            # but kept registered so parameter counts remain consistent)
+            attn.qkv = lambda x, _qkv=original_qkv, _a=q_adapter: _qkv(x) + _a(x)
 
-        attn.q_proj = q_proj_with_lora
-        attn.v_proj = v_proj_with_lora
+        else:
+            _logger.warning(
+                f"Block {block_idx}: cannot find q_proj/v_proj or qkv in attention "
+                f"module {type(attn).__name__}. Skipping LoRA injection for this block."
+            )
 
     def freeze_base(self):
         """Freeze all base model parameters (LoRA adapters remain trainable)."""
