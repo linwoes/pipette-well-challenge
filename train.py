@@ -542,6 +542,7 @@ def main():
         use_lora=True,
         lora_rank=8,
         use_dinov2=use_dinov2,
+        img_size=args.img_size,
     )
     model = model.to(device)
 
