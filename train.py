@@ -285,8 +285,10 @@ class Trainer:
 
         self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        # Loss function
-        self.criterion = WellDetectionLoss(gamma=2.0, alpha=focal_alpha)
+        # Loss function: focal loss + well-level consistency loss
+        self.criterion = WellDetectionLoss(
+            gamma=2.0, alpha=focal_alpha, well_consistency_weight=0.5,
+        )
 
         # LR scheduler with warmup
         self.scheduler = self._build_scheduler(epochs, warmup_epochs)
@@ -384,9 +386,13 @@ class Trainer:
         row_targets_all = np.vstack(all_row_targets)
         col_targets_all = np.vstack(all_col_targets)
 
-        # Threshold at 0.5
-        row_preds_binary = (row_preds_all > 0.5).astype(int)
-        col_preds_binary = (col_preds_all > 0.5).astype(int)
+        # Threshold at 0.3 — lower threshold catches positive activations
+        # that the corrected focal loss pushes above 0.5, while avoiding the
+        # sigmoid(0)=0.5 boundary that caused threshold collapse in v3.
+        # Strict > avoids capturing the exact-0.3 boundary.
+        val_threshold = 0.3
+        row_preds_binary = (row_preds_all > val_threshold).astype(int)
+        col_preds_binary = (col_preds_all > val_threshold).astype(int)
 
         # Compute well predictions
         exact_match_scores = []

@@ -54,7 +54,7 @@ class PipetteWellDetector:
     def __init__(
         self,
         model_checkpoint: Optional[str] = None,
-        threshold: float = 0.5,
+        threshold: float = 0.3,
         device: Optional[str] = None,
         img_size: int = 448,
         use_adaptive: bool = True,
@@ -354,7 +354,7 @@ def main():
     parser.add_argument('--topview', type=str, required=True, help='Path to top-view video file')
     parser.add_argument('--output', type=str, default=None, help='Output JSON file (default: stdout)')
     parser.add_argument('--model', type=str, default=None, help='Model checkpoint path')
-    parser.add_argument('--threshold', type=float, default=0.5, help='Confidence threshold')
+    parser.add_argument('--threshold', type=float, default=0.3, help='Confidence threshold (default 0.3)')
     parser.add_argument('--img_size', type=int, default=448,
                         help='Input image size (must be multiple of 14; default 448)')
     parser.add_argument('--no-adaptive', action='store_true',

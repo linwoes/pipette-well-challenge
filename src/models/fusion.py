@@ -310,21 +310,26 @@ class WellDetectionLoss(nn.Module):
         alpha: float = 0.25,
         row_weight: float = 1.0,
         col_weight: float = 1.0,
+        well_consistency_weight: float = 0.5,
     ):
         """
-        Initialize focal loss.
+        Initialize focal loss with optional well-level consistency term.
 
         Args:
             gamma: Focusing parameter (default 2.0)
             alpha: Weighting factor for positive class (default 0.25)
             row_weight: Weight for row loss (default 1.0)
             col_weight: Weight for column loss (default 1.0)
+            well_consistency_weight: Weight for the outer-product well-level
+                BCE loss that bridges the row/col factor gap (default 0.5).
+                Set to 0.0 to disable.
         """
         super().__init__()
         self.gamma = gamma
         self.alpha = alpha
         self.row_weight = row_weight
         self.col_weight = col_weight
+        self.well_consistency_weight = well_consistency_weight
 
     def forward(
         self,
@@ -335,6 +340,14 @@ class WellDetectionLoss(nn.Module):
     ) -> torch.Tensor:
         """
         Compute focal loss for row and column predictions.
+
+        The loss has three components:
+          1. Row focal loss — per-row binary classification
+          2. Column focal loss — per-column binary classification
+          3. Well consistency loss — BCE on the 8×12 outer product of
+             row/col probabilities vs the outer product of row/col targets.
+             This provides a direct gradient signal toward the Cartesian
+             product that exact_match and Jaccard actually measure.
 
         Args:
             row_logits: (B, 8) raw row predictions
@@ -351,8 +364,33 @@ class WellDetectionLoss(nn.Module):
         # Compute focal loss for columns
         col_loss = self._focal_loss(col_logits, col_targets)
 
-        # Weighted combination
+        # Weighted combination of factored losses
         total_loss = self.row_weight * row_loss + self.col_weight * col_loss
+
+        # Well-level consistency loss: outer product of probabilities
+        if self.well_consistency_weight > 0:
+            row_probs = torch.sigmoid(row_logits)   # (B, 8)
+            col_probs = torch.sigmoid(col_logits)   # (B, 12)
+
+            # Predicted well probabilities: P(well_ij) = P(row_i) * P(col_j)
+            pred_wells = torch.bmm(
+                row_probs.unsqueeze(2),   # (B, 8, 1)
+                col_probs.unsqueeze(1),   # (B, 1, 12)
+            )  # (B, 8, 12)
+
+            # Ground truth well grid: GT(well_ij) = GT(row_i) * GT(col_j)
+            gt_wells = torch.bmm(
+                row_targets.unsqueeze(2).float(),  # (B, 8, 1)
+                col_targets.unsqueeze(1).float(),  # (B, 1, 12)
+            )  # (B, 8, 12)
+
+            # BCE on the full 8×12 well grid — provides gradient that
+            # directly penalises false-positive and false-negative wells
+            # in the Cartesian product space.
+            well_loss = F.binary_cross_entropy(
+                pred_wells, gt_wells, reduction='mean'
+            )
+            total_loss = total_loss + self.well_consistency_weight * well_loss
 
         return total_loss
 
@@ -364,6 +402,9 @@ class WellDetectionLoss(nn.Module):
         """
         Compute focal loss for a single task (row or column).
 
+        Standard focal loss: -alpha_t * (1 - p_t)^gamma * log(p_t)
+        where alpha_t = alpha for positive examples, (1 - alpha) for negatives.
+
         Args:
             logits: (B, C) raw logits
             targets: (B, C) binary targets [0, 1]
@@ -374,24 +415,33 @@ class WellDetectionLoss(nn.Module):
         # Convert logits to probabilities
         probs = torch.sigmoid(logits)  # (B, C)
 
-        # Focal weighting
-        # For positive samples: (1 - p)^gamma
-        # For negative samples: p^gamma
+        # Focal weighting: (1 - p_t)^gamma
+        # For positive samples: (1 - p)^gamma  — hard positives get upweighted
+        # For negative samples: p^gamma         — hard negatives get upweighted
         focal_weight = torch.where(
             targets > 0.5,
             (1 - probs) ** self.gamma,  # Positive: (1-p)^gamma
             probs ** self.gamma  # Negative: p^gamma
         )
 
-        # Binary cross-entropy with focal weighting
+        # Alpha balancing: alpha for positives, (1 - alpha) for negatives.
+        # With alpha=0.75 this gives 3× weight to rare positive wells,
+        # counteracting the ~96% negative class imbalance in 96-well plates.
+        alpha_weight = torch.where(
+            targets > 0.5,
+            torch.full_like(targets, self.alpha),       # positives: alpha
+            torch.full_like(targets, 1.0 - self.alpha), # negatives: 1-alpha
+        )
+
+        # Binary cross-entropy (numerically stable, from logits)
         bce_loss = F.binary_cross_entropy_with_logits(
             logits,
             targets.float(),
             reduction='none'
         )  # (B, C)
 
-        # Apply focal weighting
-        focal_loss = self.alpha * focal_weight * bce_loss  # (B, C)
+        # Combine: alpha_t * focal_weight * BCE
+        focal_loss = alpha_weight * focal_weight * bce_loss  # (B, C)
 
         # Return mean loss
         return focal_loss.mean()
