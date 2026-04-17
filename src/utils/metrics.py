@@ -44,7 +44,10 @@ def jaccard_similarity(pred_wells: List[Dict], gt_wells: List[Dict]) -> float:
     union = len(pred_set | gt_set)
 
     if union == 0:
-        return 1.0 if len(pred_wells) == len(gt_wells) == 0 else 0.0
+        # Both sets empty — define similarity as 0.0 (no correct prediction to reward).
+        # Returning 1.0 here would inflate validation Jaccard whenever a clip has no
+        # active wells and the model correctly predicts none, masking real failures.
+        return 0.0
 
     return intersection / union
 

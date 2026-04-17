@@ -207,6 +207,19 @@ class DualViewFusion(nn.Module):
             else:
                 self.backbone_topview = None
 
+        # L-2: Dimension guard — verify backbone output dim matches temporal_dim
+        # before constructing the Temporal Attention modules.
+        # A mismatch (e.g. loading a DINOv2 checkpoint into ResNet18 or vice-versa)
+        # causes a silent shape error that is hard to debug at inference time.
+        if use_dinov2:
+            backbone_output_dim = 768  # DINOv2-ViT-B/14 CLS token
+        else:
+            backbone_output_dim = 512  # ResNet-18 global avg pool
+        assert backbone_output_dim == temporal_dim, (
+            f"Backbone output dim ({backbone_output_dim}) != temporal_dim ({temporal_dim}). "
+            f"Use temporal_dim={backbone_output_dim} when use_dinov2={use_dinov2}."
+        )
+
         # Temporal attention for each view
         self.temporal_fpv = TemporalAttention(
             d_model=temporal_dim,
@@ -301,13 +314,13 @@ class WellDetectionLoss(nn.Module):
       FL(p) = -alpha * (1 - p)^gamma * log(p) for positive class
       FL(p) = -(1 - alpha) * p^gamma * log(1 - p) for negative class
 
-    Default: gamma=2.0, alpha=0.25 (from Focal Loss paper)
+    Default: gamma=2.0, alpha=0.75 (tuned for 96-well plate class imbalance ~96% negatives)
     """
 
     def __init__(
         self,
         gamma: float = 2.0,
-        alpha: float = 0.25,
+        alpha: float = 0.75,
         row_weight: float = 1.0,
         col_weight: float = 1.0,
         well_consistency_weight: float = 0.5,
@@ -317,7 +330,8 @@ class WellDetectionLoss(nn.Module):
 
         Args:
             gamma: Focusing parameter (default 2.0)
-            alpha: Weighting factor for positive class (default 0.25)
+            alpha: Weighting factor for positive class (default 0.75). Set > 0.5 to
+                upweight the rare positive wells in a 96-well plate (~96% negatives).
             row_weight: Weight for row loss (default 1.0)
             col_weight: Weight for column loss (default 1.0)
             well_consistency_weight: Weight for the outer-product well-level

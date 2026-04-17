@@ -1,72 +1,98 @@
 # Default Configuration for Pipette Well Detection
 # Date: April 2026
+#
+# S-1 FIX: This file now accurately reflects the production model configuration.
+# Previous version specified resnet18 + 224px + wrong checkpoint path, none of
+# which matched the DINOv2-ViT-B/14 + 448px + checkpoints/best.pt stack.
 
 # Model Configuration
 model:
-  backbone: "resnet18"
+  backbone: "dinov2"         # DINOv2-ViT-B/14 via timm (use "resnet18" for CPU debug runs)
   pretrained: true
   # DINOv2 ViT-B/14: must be multiple of patch_size=14
-  # Valid: 224 (16×14, minimum), 336 (24×14), 448 (32×14), 518 (37×14, recommended)
-  input_size: [224, 224]
-  num_rows: 8  # Rows A-H
-  num_columns: 12  # Columns 1-12
-  fusion_type: "concatenation"  # Or "cross_attention", "gating"
+  # Valid: 224 (16×14), 336 (24×14), 448 (32×14 — used in v4+), 518 (37×14, Meta-recommended)
+  input_size: [448, 448]     # matches training_v4 (img_size=448)
+  num_rows: 8                # Rows A–H
+  num_columns: 12            # Columns 1–12
+  use_lora: true
+  lora_rank: 8
+  temporal_layers: 2
+  output_dim: 256
 
 # Checkpoint & Weights
 checkpoint:
-  path: "models/best_checkpoint.pth"
-  device: "cuda"  # Or "cpu" if GPU unavailable
+  path: "checkpoints/best.pt"      # written by train.py when a new val-loss best is reached
+  device: "cpu"              # override to "cuda" when running on GPU host
+
+# Training Configuration
+training:
+  epochs: 50
+  batch_size: 2
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-4
+  num_frames: 4              # frames sampled per clip per view
+  val_split: 0.2
+  early_stopping_patience: 20   # F-3: was 10, too aggressive for 20-sample val set
+  early_stopping_monitor: "val_loss"
+  # Loss weights
+  focal_gamma: 2.0
+  focal_alpha: 0.75          # L-4 fix: was 0.25 (positive class weight for 96-well imbalance)
+  well_consistency_weight: 0.2   # F-4: was 0.5; lower reduces gradient spikes on border patterns
 
 # Inference Configuration
 inference:
   batch_size: 1
-  confidence_threshold: 0.5  # Minimum confidence to output a well
-  frame_sampling_rate: 5  # Sample every Nth frame from video
-  max_inference_time_seconds: 120  # 2 minutes max per sample
+  confidence_threshold: 0.3  # Bug-3 fix: was 0.5 (suppressed all multi-well predictions)
+  # frame_sampling_rate: sample every Nth frame from the clip.
+  # T-4 NOTE: This is a frame-index stride, not a temporal rate.
+  # "5" means use frames [0, 5, 10, ...] — it does NOT mean 5 Hz.
+  # Default None lets load_video() decide based on clip length.
+  frame_sampling_rate: null
+  max_inference_time_seconds: 120
   enable_temporal_alignment: true
 
 # Video Processing
 video:
   target_fps: 30
-  frame_resize: [224, 224]
-  format: "mp4"  # Expected input format
+  frame_resize: [448, 448]   # must match model.input_size
+  format: "mp4"
 
 # Augmentation Configuration (for training only)
 augmentation:
-  enable: false  # Only during training
+  enable: false
   temporal:
-    frame_offset: 3  # +/- frames
+    frame_offset: 3
     speed_jitter: [0.9, 1.1]
   geometric:
-    rotation: 8  # +/- degrees
+    rotation: 8
     scale: [0.9, 1.1]
-    shear: 5  # +/- degrees
+    shear: 5
   photometric:
-    brightness: 0.15  # +/- fraction
+    brightness: 0.15
     contrast: [1.0, 1.3]
     blur_kernel: [1, 3]
-    hue_shift: 10  # +/- degrees in HSV
+    hue_shift: 10
 
 # Post-processing
 postprocessing:
   apply_cardinality_constraint: true
-  cardinality_head: false  # Use explicit cardinality classifier (future enhancement)
-  sort_canonical: true  # Sort output as A1, A2, ..., H12
+  cardinality_head: false
+  sort_canonical: true
   deduplicate: true
 
 # Logging & Debugging
 logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
   save_diagnostics: false
-  output_confidence_maps: false  # Save heatmaps for visualization
+  output_confidence_maps: false
 
 # Output Schema Validation
 output_validation:
   strict_schema: true
-  require_confidence_scores: false  # Include confidence per well (optional)
+  require_confidence_scores: false
 
 # Hardware Configuration
 hardware:
-  use_mixed_precision: true  # AMP during inference
-  num_workers: 4  # DataLoader workers (training only)
+  use_mixed_precision: true
+  num_workers: 4
   pin_memory: true

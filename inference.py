@@ -312,8 +312,21 @@ class PipetteWellDetector:
 
         return output
 
-    def infer_and_predict(self, fpv_path: str, topview_path: str) -> Dict:
-        """End-to-end inference pipeline: load videos → model → well predictions."""
+    def infer_and_predict(self, fpv_path: str, topview_path: str, safe: bool = False) -> Dict:
+        """
+        End-to-end inference pipeline: load videos → model → well predictions.
+
+        Args:
+            fpv_path: Path to FPV video
+            topview_path: Path to top-view video
+            safe: If True (S-4 fix), catch all exceptions and return an error dict
+                  instead of raising. This allows batch callers to continue past
+                  a bad clip without aborting the whole run.
+
+        Returns:
+            Output dict. On error with safe=True, contains:
+              {'error': True, 'error_message': '...', 'clip_id_fpv': ..., 'wells_prediction': []}
+        """
         start_time = time.time()
 
         try:
@@ -340,8 +353,60 @@ class PipetteWellDetector:
             return output
 
         except Exception as e:
+            if safe:
+                logger.error(f"Clip failed (safe mode — continuing): {fpv_path} | {e}", exc_info=True)
+                return {
+                    'error': True,
+                    'error_message': str(e),
+                    'error_type': type(e).__name__,
+                    'clip_id_fpv': fpv_path,
+                    'clip_id_topview': topview_path,
+                    'wells_prediction': [],
+                    'metadata': {
+                        'inference_time_s': time.time() - start_time,
+                        'model': 'error',
+                    },
+                }
             logger.error(f"Inference failed: {e}", exc_info=True)
             raise
+
+    def batch_infer(self, clips: List[Dict[str, str]]) -> List[Dict]:
+        """
+        Run inference on a list of clip pairs with per-clip error isolation (S-4).
+
+        Args:
+            clips: List of dicts with keys 'fpv' and 'topview' (file paths).
+                   Any additional keys are forwarded to the output dict.
+
+        Returns:
+            List of result dicts. Failed clips return an error dict (error=True)
+            rather than raising, so the batch always completes.
+
+        Example:
+            clips = [
+                {'fpv': 'clip_001_FPV.mp4', 'topview': 'clip_001_Topview.mp4'},
+                {'fpv': 'clip_002_FPV.mp4', 'topview': 'clip_002_Topview.mp4'},
+            ]
+            results = detector.batch_infer(clips)
+            errors = [r for r in results if r.get('error')]
+        """
+        results = []
+        n = len(clips)
+        for i, clip in enumerate(clips):
+            fpv = clip['fpv']
+            topview = clip['topview']
+            logger.info(f"[{i+1}/{n}] Processing: {Path(fpv).name}")
+            result = self.infer_and_predict(fpv, topview, safe=True)
+            # Merge any extra keys from the clip dict into the result metadata
+            extra = {k: v for k, v in clip.items() if k not in ('fpv', 'topview')}
+            if extra:
+                result.setdefault('metadata', {}).update(extra)
+            results.append(result)
+
+        n_ok = sum(1 for r in results if not r.get('error'))
+        n_err = n - n_ok
+        logger.info(f"Batch complete: {n_ok}/{n} clips OK, {n_err} errors")
+        return results
 
 
 def main():

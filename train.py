@@ -120,6 +120,10 @@ class PipetteWellDataset(Dataset):
 
         logger.info(f"Loaded {len(self.labels)} labels")
 
+        # T-3: Validate label schema at load time. Fail fast rather than
+        # discovering malformed entries as cryptic errors mid-training.
+        self._validate_labels(self.labels, labels_path)
+
         # Build augmentation pipeline (only if albumentations available)
         if self.augment:
             self.transform = A.Compose([
@@ -246,6 +250,94 @@ class PipetteWellDataset(Dataset):
 
         return row_labels, col_labels
 
+    @staticmethod
+    def _validate_labels(labels: List[Dict], labels_path: str) -> None:
+        """
+        T-3: Validate label schema at dataset load time.
+
+        Checks:
+          - Top-level list (not dict)
+          - Each entry has required keys: clip_id_FPV, clip_id_Topview, wells_ground_truth
+          - Each well has well_row (single uppercase A–H) and well_column (1–12)
+          - well_column must be int-castable
+          - Duplicate (clip_id_FPV, clip_id_Topview) pairs are flagged
+
+        Raises:
+            ValueError: On any schema violation, with the entry index and message.
+
+        Logs a warning per entry for non-fatal issues (e.g., empty well list).
+        """
+        REQUIRED_ENTRY_KEYS = {'clip_id_FPV', 'clip_id_Topview', 'wells_ground_truth'}
+        VALID_ROWS = set('ABCDEFGH')
+
+        if not isinstance(labels, list):
+            raise ValueError(
+                f"labels.json must be a JSON array at the top level. "
+                f"Got {type(labels).__name__}. File: {labels_path}"
+            )
+
+        seen_pairs: set = set()
+        errors: List[str] = []
+
+        for i, entry in enumerate(labels):
+            prefix = f"labels[{i}]"
+
+            # Required keys
+            missing = REQUIRED_ENTRY_KEYS - set(entry.keys())
+            if missing:
+                errors.append(f"{prefix}: missing required keys {sorted(missing)}")
+                continue  # skip further checks for this entry
+
+            # Duplicate clip pairs
+            pair = (entry['clip_id_FPV'], entry['clip_id_Topview'])
+            if pair in seen_pairs:
+                errors.append(f"{prefix}: duplicate clip pair {pair}")
+            seen_pairs.add(pair)
+
+            # Empty well list is valid (no-well clip) but worth logging
+            wells = entry['wells_ground_truth']
+            if not isinstance(wells, list):
+                errors.append(f"{prefix}: wells_ground_truth must be a list, got {type(wells).__name__}")
+                continue
+
+            if len(wells) == 0:
+                logger.warning(f"{prefix} ({pair[0]}): empty wells_ground_truth — is this intentional?")
+
+            for j, well in enumerate(wells):
+                wprefix = f"{prefix}.wells[{j}]"
+
+                if not isinstance(well, dict):
+                    errors.append(f"{wprefix}: expected dict, got {type(well).__name__}")
+                    continue
+
+                # well_row validation
+                row = well.get('well_row')
+                if row is None:
+                    errors.append(f"{wprefix}: missing well_row")
+                elif not isinstance(row, str) or row.upper() not in VALID_ROWS:
+                    errors.append(f"{wprefix}: well_row={row!r} must be one of A–H")
+
+                # well_column validation
+                col = well.get('well_column')
+                if col is None:
+                    errors.append(f"{wprefix}: missing well_column")
+                else:
+                    try:
+                        col_int = int(col)
+                        if not (1 <= col_int <= 12):
+                            errors.append(f"{wprefix}: well_column={col!r} out of range 1–12")
+                    except (TypeError, ValueError):
+                        errors.append(f"{wprefix}: well_column={col!r} is not int-castable")
+
+        if errors:
+            summary = "\n  ".join(errors)
+            raise ValueError(
+                f"Label validation failed for {labels_path} "
+                f"({len(errors)} error(s)):\n  {summary}"
+            )
+
+        logger.info(f"Label validation passed: {len(labels)} entries, {len(seen_pairs)} unique clips")
+
 
 class Trainer:
     """Training orchestrator."""
@@ -261,9 +353,10 @@ class Trainer:
         lr: float = 1e-4,
         weight_decay: float = 1e-4,
         warmup_epochs: int = 5,
-        patience: int = 10,
+        patience: int = 20,
         grad_clip: float = 1.0,
         focal_alpha: float = 0.75,
+        well_consistency_weight: float = 0.2,
     ):
         """Initialize trainer."""
         self.model = model
@@ -276,6 +369,7 @@ class Trainer:
         self.patience = patience
         self.grad_clip = grad_clip
         self.focal_alpha = focal_alpha
+        self.well_consistency_weight = well_consistency_weight
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,8 +380,9 @@ class Trainer:
         self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
         # Loss function: focal loss + well-level consistency loss
+        # F-4: well_consistency_weight lowered from 0.5 to 0.2 (configurable via --well_consistency_weight)
         self.criterion = WellDetectionLoss(
-            gamma=2.0, alpha=focal_alpha, well_consistency_weight=0.5,
+            gamma=2.0, alpha=focal_alpha, well_consistency_weight=well_consistency_weight,
         )
 
         # LR scheduler with warmup
@@ -501,6 +596,10 @@ def main():
     parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
                         help='Backbone architecture (dinov2 or resnet18 for CPU training)')
     parser.add_argument('--focal_alpha', type=float, default=0.75, help='Focal loss alpha — weight for positive class (default 0.75; was 0.25)')
+    parser.add_argument('--patience', type=int, default=20,
+                        help='Early stopping patience in epochs (default 20; was 10 in v4 — too aggressive)')
+    parser.add_argument('--well_consistency_weight', type=float, default=0.2,
+                        help='Weight for outer-product well-level consistency loss (default 0.2; was 0.5 in v4)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume training from')
@@ -563,6 +662,8 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
         focal_alpha=args.focal_alpha,
+        patience=args.patience,
+        well_consistency_weight=args.well_consistency_weight,
     )
 
     # Resume from checkpoint if specified

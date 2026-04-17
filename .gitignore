@@ -149,3 +149,6 @@ models/*.pt
 temp/
 tmp/
 *.tmp
+
+# H-5: Git-LFS upload URL cache — contains pre-signed S3 URLs, should never be committed
+lfs_upload_url.txt
