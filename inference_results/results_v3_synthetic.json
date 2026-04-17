@@ -1,0 +1,602 @@
+[
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_001_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_001_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 7
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.761,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6385059356689453,
+      "max_col_prob": 0.4891672730445862
+    },
+    "clip_id": "clip_001"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_002_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_002_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.648,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6043528914451599,
+      "max_col_prob": 0.5269042253494263
+    },
+    "clip_id": "clip_002"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_003_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_003_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "H",
+        "well_column": 6
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.742,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.647429347038269,
+      "max_col_prob": 0.5405104160308838
+    },
+    "clip_id": "clip_003"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_004_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_004_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 6
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.601,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6047881245613098,
+      "max_col_prob": 0.5336279273033142
+    },
+    "clip_id": "clip_004"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_005_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_005_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "H",
+        "well_column": 9
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.737,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.4613387882709503,
+      "max_col_prob": 0.4522572159767151
+    },
+    "clip_id": "clip_005"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_006_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_006_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.607,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6529389023780823,
+      "max_col_prob": 0.5333364605903625
+    },
+    "clip_id": "clip_006"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_007_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_007_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.747,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6747673749923706,
+      "max_col_prob": 0.5332251787185669
+    },
+    "clip_id": "clip_007"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_008_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_008_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.739,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6312752962112427,
+      "max_col_prob": 0.5802561640739441
+    },
+    "clip_id": "clip_008"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_009_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_009_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 6
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.707,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6377158164978027,
+      "max_col_prob": 0.5699464082717896
+    },
+    "clip_id": "clip_009"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_010_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_010_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.644,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.4924199879169464,
+      "max_col_prob": 0.4658336639404297
+    },
+    "clip_id": "clip_010"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_011_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_011_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.68,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.5386644005775452,
+      "max_col_prob": 0.5283770561218262
+    },
+    "clip_id": "clip_011"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_012_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_012_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.689,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.7033432126045227,
+      "max_col_prob": 0.4788973331451416
+    },
+    "clip_id": "clip_012"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_013_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_013_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.782,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.7313070893287659,
+      "max_col_prob": 0.6186157464981079
+    },
+    "clip_id": "clip_013"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_014_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_014_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.619,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6903892755508423,
+      "max_col_prob": 0.5437026023864746
+    },
+    "clip_id": "clip_014"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_015_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_015_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.723,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.681847333908081,
+      "max_col_prob": 0.5621247291564941
+    },
+    "clip_id": "clip_015"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_016_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_016_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.676,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6535205841064453,
+      "max_col_prob": 0.5052323937416077
+    },
+    "clip_id": "clip_016"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_017_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_017_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.701,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6353249549865723,
+      "max_col_prob": 0.5271454453468323
+    },
+    "clip_id": "clip_017"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_018_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_018_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 9
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.72,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.4021010398864746,
+      "max_col_prob": 0.5202992558479309
+    },
+    "clip_id": "clip_018"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_019_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_019_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 1.127,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.641139030456543,
+      "max_col_prob": 0.5426321029663086
+    },
+    "clip_id": "clip_019"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_020_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_020_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.724,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.4465247094631195,
+      "max_col_prob": 0.48641467094421387
+    },
+    "clip_id": "clip_020"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_021_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_021_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 6
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.77,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.667156457901001,
+      "max_col_prob": 0.5336120128631592
+    },
+    "clip_id": "clip_021"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_022_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_022_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 6
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.601,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.5118362307548523,
+      "max_col_prob": 0.4813888967037201
+    },
+    "clip_id": "clip_022"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_023_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_023_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.763,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.5002010464668274,
+      "max_col_prob": 0.47680485248565674
+    },
+    "clip_id": "clip_023"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_024_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_024_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.704,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.64151930809021,
+      "max_col_prob": 0.5264426469802856
+    },
+    "clip_id": "clip_024"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_025_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_025_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.736,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.660426139831543,
+      "max_col_prob": 0.5757666230201721
+    },
+    "clip_id": "clip_025"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_026_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_026_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "C",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.683,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6387749314308167,
+      "max_col_prob": 0.5346876978874207
+    },
+    "clip_id": "clip_026"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_027_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_027_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.66,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.644591212272644,
+      "max_col_prob": 0.5548105239868164
+    },
+    "clip_id": "clip_027"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_028_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_028_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "D",
+        "well_column": 4
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.702,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6240679621696472,
+      "max_col_prob": 0.5301143527030945
+    },
+    "clip_id": "clip_028"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_029_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_029_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.71,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6549661755561829,
+      "max_col_prob": 0.5206601619720459
+    },
+    "clip_id": "clip_029"
+  },
+  {
+    "clip_id_FPV": "data/synthetic_val/clip_030_FPV.mp4",
+    "clip_id_Topview": "data/synthetic_val/clip_030_Topview.mp4",
+    "wells_prediction": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ],
+    "metadata": {
+      "model": "DINOv2-ViT-B/14+LoRA",
+      "inference_time_s": 0.612,
+      "confident": true,
+      "threshold": 0.5,
+      "adaptive": true,
+      "max_row_prob": 0.6440379023551941,
+      "max_col_prob": 0.6285114884376526
+    },
+    "clip_id": "clip_030"
+  }
+]

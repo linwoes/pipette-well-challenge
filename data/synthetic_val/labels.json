@@ -1,0 +1,658 @@
+[
+  {
+    "clip_id_FPV": "clip_001_FPV",
+    "clip_id_Topview": "clip_001_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 1
+      },
+      {
+        "well_row": "A",
+        "well_column": 2
+      },
+      {
+        "well_row": "A",
+        "well_column": 3
+      },
+      {
+        "well_row": "A",
+        "well_column": 4
+      },
+      {
+        "well_row": "A",
+        "well_column": 5
+      },
+      {
+        "well_row": "A",
+        "well_column": 6
+      },
+      {
+        "well_row": "A",
+        "well_column": 7
+      },
+      {
+        "well_row": "A",
+        "well_column": 8
+      },
+      {
+        "well_row": "A",
+        "well_column": 9
+      },
+      {
+        "well_row": "A",
+        "well_column": 10
+      },
+      {
+        "well_row": "A",
+        "well_column": 11
+      },
+      {
+        "well_row": "A",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_002_FPV",
+    "clip_id_Topview": "clip_002_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 8
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_003_FPV",
+    "clip_id_Topview": "clip_003_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "D",
+        "well_column": 6
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_004_FPV",
+    "clip_id_Topview": "clip_004_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 11
+      },
+      {
+        "well_row": "B",
+        "well_column": 11
+      },
+      {
+        "well_row": "C",
+        "well_column": 11
+      },
+      {
+        "well_row": "D",
+        "well_column": 11
+      },
+      {
+        "well_row": "E",
+        "well_column": 11
+      },
+      {
+        "well_row": "F",
+        "well_column": 11
+      },
+      {
+        "well_row": "G",
+        "well_column": 11
+      },
+      {
+        "well_row": "H",
+        "well_column": 11
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_005_FPV",
+    "clip_id_Topview": "clip_005_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 1
+      },
+      {
+        "well_row": "A",
+        "well_column": 2
+      },
+      {
+        "well_row": "A",
+        "well_column": 3
+      },
+      {
+        "well_row": "A",
+        "well_column": 4
+      },
+      {
+        "well_row": "A",
+        "well_column": 5
+      },
+      {
+        "well_row": "A",
+        "well_column": 6
+      },
+      {
+        "well_row": "A",
+        "well_column": 7
+      },
+      {
+        "well_row": "A",
+        "well_column": 8
+      },
+      {
+        "well_row": "A",
+        "well_column": 9
+      },
+      {
+        "well_row": "A",
+        "well_column": 10
+      },
+      {
+        "well_row": "A",
+        "well_column": 11
+      },
+      {
+        "well_row": "A",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_006_FPV",
+    "clip_id_Topview": "clip_006_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 3
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_007_FPV",
+    "clip_id_Topview": "clip_007_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 7
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_008_FPV",
+    "clip_id_Topview": "clip_008_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "H",
+        "well_column": 9
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_009_FPV",
+    "clip_id_Topview": "clip_009_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 9
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_010_FPV",
+    "clip_id_Topview": "clip_010_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 7
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_011_FPV",
+    "clip_id_Topview": "clip_011_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "B",
+        "well_column": 11
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_012_FPV",
+    "clip_id_Topview": "clip_012_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 6
+      },
+      {
+        "well_row": "B",
+        "well_column": 6
+      },
+      {
+        "well_row": "C",
+        "well_column": 6
+      },
+      {
+        "well_row": "D",
+        "well_column": 6
+      },
+      {
+        "well_row": "E",
+        "well_column": 6
+      },
+      {
+        "well_row": "F",
+        "well_column": 6
+      },
+      {
+        "well_row": "G",
+        "well_column": 6
+      },
+      {
+        "well_row": "H",
+        "well_column": 6
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_013_FPV",
+    "clip_id_Topview": "clip_013_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 5
+      },
+      {
+        "well_row": "C",
+        "well_column": 3
+      },
+      {
+        "well_row": "G",
+        "well_column": 7
+      },
+      {
+        "well_row": "H",
+        "well_column": 10
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_014_FPV",
+    "clip_id_Topview": "clip_014_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "D",
+        "well_column": 1
+      },
+      {
+        "well_row": "D",
+        "well_column": 2
+      },
+      {
+        "well_row": "D",
+        "well_column": 3
+      },
+      {
+        "well_row": "D",
+        "well_column": 4
+      },
+      {
+        "well_row": "D",
+        "well_column": 5
+      },
+      {
+        "well_row": "D",
+        "well_column": 6
+      },
+      {
+        "well_row": "D",
+        "well_column": 7
+      },
+      {
+        "well_row": "D",
+        "well_column": 8
+      },
+      {
+        "well_row": "D",
+        "well_column": 9
+      },
+      {
+        "well_row": "D",
+        "well_column": 10
+      },
+      {
+        "well_row": "D",
+        "well_column": 11
+      },
+      {
+        "well_row": "D",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_015_FPV",
+    "clip_id_Topview": "clip_015_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "D",
+        "well_column": 3
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_016_FPV",
+    "clip_id_Topview": "clip_016_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "E",
+        "well_column": 11
+      },
+      {
+        "well_row": "A",
+        "well_column": 11
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_017_FPV",
+    "clip_id_Topview": "clip_017_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 4
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_018_FPV",
+    "clip_id_Topview": "clip_018_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 2
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_019_FPV",
+    "clip_id_Topview": "clip_019_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 1
+      },
+      {
+        "well_row": "G",
+        "well_column": 2
+      },
+      {
+        "well_row": "G",
+        "well_column": 3
+      },
+      {
+        "well_row": "G",
+        "well_column": 4
+      },
+      {
+        "well_row": "G",
+        "well_column": 5
+      },
+      {
+        "well_row": "G",
+        "well_column": 6
+      },
+      {
+        "well_row": "G",
+        "well_column": 7
+      },
+      {
+        "well_row": "G",
+        "well_column": 8
+      },
+      {
+        "well_row": "G",
+        "well_column": 9
+      },
+      {
+        "well_row": "G",
+        "well_column": 10
+      },
+      {
+        "well_row": "G",
+        "well_column": 11
+      },
+      {
+        "well_row": "G",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_020_FPV",
+    "clip_id_Topview": "clip_020_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 5
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_021_FPV",
+    "clip_id_Topview": "clip_021_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_022_FPV",
+    "clip_id_Topview": "clip_022_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "G",
+        "well_column": 10
+      },
+      {
+        "well_row": "H",
+        "well_column": 9
+      },
+      {
+        "well_row": "B",
+        "well_column": 5
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_023_FPV",
+    "clip_id_Topview": "clip_023_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "D",
+        "well_column": 6
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_024_FPV",
+    "clip_id_Topview": "clip_024_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 1
+      },
+      {
+        "well_row": "B",
+        "well_column": 1
+      },
+      {
+        "well_row": "C",
+        "well_column": 1
+      },
+      {
+        "well_row": "D",
+        "well_column": 1
+      },
+      {
+        "well_row": "E",
+        "well_column": 1
+      },
+      {
+        "well_row": "F",
+        "well_column": 1
+      },
+      {
+        "well_row": "G",
+        "well_column": 1
+      },
+      {
+        "well_row": "H",
+        "well_column": 1
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_025_FPV",
+    "clip_id_Topview": "clip_025_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "E",
+        "well_column": 2
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_026_FPV",
+    "clip_id_Topview": "clip_026_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 9
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_027_FPV",
+    "clip_id_Topview": "clip_027_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "A",
+        "well_column": 12
+      },
+      {
+        "well_row": "B",
+        "well_column": 12
+      },
+      {
+        "well_row": "C",
+        "well_column": 12
+      },
+      {
+        "well_row": "D",
+        "well_column": 12
+      },
+      {
+        "well_row": "E",
+        "well_column": 12
+      },
+      {
+        "well_row": "F",
+        "well_column": 12
+      },
+      {
+        "well_row": "G",
+        "well_column": 12
+      },
+      {
+        "well_row": "H",
+        "well_column": 12
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_028_FPV",
+    "clip_id_Topview": "clip_028_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "F",
+        "well_column": 5
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_029_FPV",
+    "clip_id_Topview": "clip_029_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "H",
+        "well_column": 5
+      }
+    ]
+  },
+  {
+    "clip_id_FPV": "clip_030_FPV",
+    "clip_id_Topview": "clip_030_Topview",
+    "wells_ground_truth": [
+      {
+        "well_row": "C",
+        "well_column": 1
+      },
+      {
+        "well_row": "C",
+        "well_column": 2
+      },
+      {
+        "well_row": "C",
+        "well_column": 3
+      },
+      {
+        "well_row": "C",
+        "well_column": 4
+      },
+      {
+        "well_row": "C",
+        "well_column": 5
+      },
+      {
+        "well_row": "C",
+        "well_column": 6
+      },
+      {
+        "well_row": "C",
+        "well_column": 7
+      },
+      {
+        "well_row": "C",
+        "well_column": 8
+      },
+      {
+        "well_row": "C",
+        "well_column": 9
+      },
+      {
+        "well_row": "C",
+        "well_column": 10
+      },
+      {
+        "well_row": "C",
+        "well_column": 11
+      },
+      {
+        "well_row": "C",
+        "well_column": 12
+      }
+    ]
+  }
+]

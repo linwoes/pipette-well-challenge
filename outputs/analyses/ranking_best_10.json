@@ -1,0 +1,108 @@
+{
+  "analysis_date": "2026-04-17T00:16:38Z",
+  "mode": "best",
+  "top_k": 10,
+  "total_results": 30,
+  "results": [
+    {
+      "rank": 1,
+      "result_index": 1,
+      "clip_id": "clip_002",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.49567928613916834
+    },
+    {
+      "rank": 2,
+      "result_index": 2,
+      "clip_id": "clip_003",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.5388667091556414
+    },
+    {
+      "rank": 3,
+      "result_index": 5,
+      "clip_id": "clip_006",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.5650868219873981
+    },
+    {
+      "rank": 4,
+      "result_index": 6,
+      "clip_id": "clip_007",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.6031829154857249
+    },
+    {
+      "rank": 5,
+      "result_index": 7,
+      "clip_id": "clip_008",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.4188875733475079
+    },
+    {
+      "rank": 6,
+      "result_index": 8,
+      "clip_id": "clip_009",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.4538068968965092
+    },
+    {
+      "rank": 7,
+      "result_index": 9,
+      "clip_id": "clip_010",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.4384797443686068
+    },
+    {
+      "rank": 8,
+      "result_index": 10,
+      "clip_id": "clip_011",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.37826573380404227
+    },
+    {
+      "rank": 9,
+      "result_index": 14,
+      "clip_id": "clip_015",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.547803585553595
+    },
+    {
+      "rank": 10,
+      "result_index": 16,
+      "clip_id": "clip_017",
+      "exact_match": false,
+      "jaccard": 0.0,
+      "cardinality_match": true,
+      "hamming_distance": 2,
+      "anomaly_score": 0.5489046911113036
+    }
+  ]
+}

@@ -91,8 +91,18 @@ def _persistent_id(clip_id: str, result_index: int) -> str:
 
 
 def _extract_clip_id(fpv_id: str) -> str:
-    """Extract base clip_id from 'clip_001_FPV' → 'clip_001'."""
-    return re.sub(r"_(FPV|Topview)$", "", fpv_id, flags=re.IGNORECASE)
+    """Extract base clip_id from various input forms.
+
+    Handles:
+      'clip_001_FPV'                        → 'clip_001'
+      'clip_001_FPV.mp4'                    → 'clip_001'
+      'data/synthetic_val/clip_001_FPV.mp4' → 'clip_001'
+      'clip_001'                            → 'clip_001'  (passthrough)
+    """
+    # Strip directory prefix and file extension
+    stem = Path(fpv_id).stem if fpv_id else fpv_id
+    # Strip _FPV / _Topview suffix
+    return re.sub(r"_(FPV|Topview)$", "", stem, flags=re.IGNORECASE)
 
 
 def _find_videos(clip_id: str, search_dirs: List[Path]) -> Tuple[Optional[Path], Optional[Path]]:
@@ -616,7 +626,9 @@ def cmd_rank(args):
     if mode == "worst":
         scored.sort(key=lambda s: s["scores"]["hamming_distance"], reverse=True)
     elif mode == "best":
-        scored.sort(key=lambda s: s["scores"]["jaccard"], reverse=True)
+        # Primary: jaccard descending; secondary: hamming ascending (ties resolved
+        # by lowest error distance — most useful when all jaccard scores are equal)
+        scored.sort(key=lambda s: (-s["scores"]["jaccard"], s["scores"]["hamming_distance"]))
     elif mode == "strangest":
         scored.sort(key=lambda s: s["scores"]["anomaly_score"], reverse=True)
     else:
