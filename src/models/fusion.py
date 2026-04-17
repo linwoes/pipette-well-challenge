@@ -367,7 +367,13 @@ class WellDetectionLoss(nn.Module):
         # Weighted combination of factored losses
         total_loss = self.row_weight * row_loss + self.col_weight * col_loss
 
-        # Well-level consistency loss: outer product of probabilities
+        # Well-level consistency loss: outer product of probabilities.
+        # This loss is only valid when the ground truth well set is exactly
+        # the Cartesian product of its row and column marginals (rectangular
+        # patterns: single wells, full rows, full columns). For scatter
+        # patterns (e.g., {A1, C3, F7}), the outer product generates phantom
+        # wells not in ground truth, producing incorrect supervision.
+        # Per-sample mask ensures the loss is skipped for non-rectangular GT.
         if self.well_consistency_weight > 0:
             row_probs = torch.sigmoid(row_logits)   # (B, 8)
             col_probs = torch.sigmoid(col_logits)   # (B, 12)
@@ -379,18 +385,44 @@ class WellDetectionLoss(nn.Module):
             )  # (B, 8, 12)
 
             # Ground truth well grid: GT(well_ij) = GT(row_i) * GT(col_j)
-            gt_wells = torch.bmm(
+            gt_cart = torch.bmm(
                 row_targets.unsqueeze(2).float(),  # (B, 8, 1)
                 col_targets.unsqueeze(1).float(),  # (B, 1, 12)
-            )  # (B, 8, 12)
+            )  # (B, 8, 12) — Cartesian product of row/col marginals
 
-            # BCE on the full 8×12 well grid — provides gradient that
-            # directly penalises false-positive and false-negative wells
-            # in the Cartesian product space.
-            well_loss = F.binary_cross_entropy(
-                pred_wells, gt_wells, reduction='mean'
-            )
-            total_loss = total_loss + self.well_consistency_weight * well_loss
+            # Per-sample rectangularity mask: 1 where GT == Cartesian product.
+            # If a sample's well pattern is not rectangular, its consistency
+            # loss contribution is zeroed out to avoid incorrect supervision.
+            #
+            # For a rectangular pattern (GT_well_ij == row_i AND col_j for all
+            # active wells) the Cartesian product exactly equals the true GT
+            # and the mask is 1. For scatter patterns (e.g. {A1,C3}) the
+            # Cartesian product adds phantom wells (A3, C1) and the mask is 0.
+            is_rectangular = (gt_cart == gt_cart).all(dim=(1, 2))  # placeholder shape
+            # Compute actual GT well grid from labels (if passed directly, use gt_cart)
+            # Check: does the Cartesian product match an independent well-level GT?
+            # Since we only have row/col targets (not per-well GT), we detect
+            # non-rectangular patterns by checking if |active rows| * |active cols|
+            # equals |active wells via OR-marginals| (which equals total active Cartesian cells).
+            active_rows = row_targets.sum(dim=1)      # (B,) — number of active rows
+            active_cols = col_targets.sum(dim=1)      # (B,) — number of active columns
+            cart_count = active_rows * active_cols    # (B,) — cells in Cartesian product
+
+            # Heuristic: if cart_count > 1 and neither a full row nor full col
+            # pattern, we cannot verify rectangularity without per-well GT.
+            # Conservative rule: apply loss only to patterns that are provably
+            # rectangular — i.e., single row, single column, or single well.
+            # For multi-row × multi-col patterns, skip (set weight to 0).
+            is_safe = (active_rows <= 1) | (active_cols <= 1)  # (B,) bool
+
+            if is_safe.any():
+                # Only compute loss over safe (rectangular) samples
+                safe_mask = is_safe.float()  # (B,)
+                well_loss_per_sample = F.binary_cross_entropy(
+                    pred_wells, gt_cart, reduction='none'
+                ).mean(dim=(1, 2))  # (B,)
+                well_loss = (safe_mask * well_loss_per_sample).sum() / (safe_mask.sum() + 1e-8)
+                total_loss = total_loss + self.well_consistency_weight * well_loss
 
         return total_loss
 
