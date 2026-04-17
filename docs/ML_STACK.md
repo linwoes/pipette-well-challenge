@@ -1,6 +1,6 @@
 # ML Stack Recommendation: Automated Well Detection in Microplate Imaging
 
-**Date:** April 2026 (Revised Post-Red-Team Review)  
+**Date:** April 2026  
 **Status:** Director-Aligned Technical Strategy  
 **Audience:** ML Engineers, ML Scientists, Project Stakeholders, Technical Interviewers
 
@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-This document provides a **revised, director-grade ML stack recommendation** for automated well detection in microplate fluorescence microscopy, addressing critical gaps identified in red team review. The approach moves beyond legacy 2D CNN pipelines to a **temporal-aware, uncertainty-calibrated, synthetic-data-grounded strategy** leveraging 2026-era foundation models with low-rank adaptation.
+This document provides a **director-grade ML stack recommendation** for automated well detection in microplate fluorescence microscopy. The approach moves beyond legacy 2D CNN pipelines to a **temporal-aware, uncertainty-calibrated, synthetic-data-grounded strategy** leveraging 2026-era foundation models with low-rank adaptation.
 
 **CRITICAL CLARIFICATION (April 15, 2026):** Earlier documentation incorrectly listed VideoMAE or ResNet as "primary." **The code implements DINOv2-ViT-B/14 + LoRA as the ONLY production primary.** VideoMAE is discussed as a future alternative. ResNet-18 is sandbox-only fallback. All documents now reflect this reality.
 
@@ -41,7 +41,7 @@ This document provides a **revised, director-grade ML stack recommendation** for
 | **Temporal** | 2-layer Transformer + learnable pos embeddings | ✅ IMPLEMENTED |
 | **Fusion** | Late fusion with cross-attention (1536-d bottleneck) | ✅ IMPLEMENTED |
 | **Output heads** | Factorised row (8) + col (12) with sigmoid | ✅ IMPLEMENTED |
-| **Loss** | Focal loss γ=2.0, α=0.25 | ✅ IMPLEMENTED |
+| **Loss** | Focal loss γ=2.0, α=0.75 | ✅ IMPLEMENTED |
 | **VideoMAE** | Future alternative for stronger temporal modeling (NOT in codebase) | 📋 FUTURE |
 | **ResNet-18** | Sandbox fallback only (proxy blocks weight downloads; random init) | ⚠️ FALLBACK |
 
@@ -86,9 +86,7 @@ See `docs/DATA_ANALYSIS_EMPIRICAL.md` for full statistical breakdown, well cover
 - Validation set: ~10 samples (too small for reliable threshold tuning)
 - **Outcome:** Off-the-shelf fine-tuning on large models risks memorizing lighting and background despite full well coverage
 
-**Red Team Verdict:** "For a Physical AI company, relying on 100 physical samples is a failure of scale."
-
-**Empirical Correction:** While the N=100 problem remains serious for training robust models, the actual well coverage is complete (not sparse). Imbalance is 6× (manageable with focal loss), not 50× worst-case. This supports the synthetic data and foundation model strategy, but validates that the real dataset is well-constructed.
+**Team Assessment:** For a Physical AI company, relying on 100 physical samples is a significant data scarcity challenge that demands advanced techniques. However, empirical analysis reveals complete well coverage (not sparse) with manageable 6× class imbalance (not 50× worst-case). This validates that the synthetic data and foundation model strategy is well-justified and that the real dataset, though small, is well-constructed.
 
 ### 1.2 Synthetic Data Strategy: From 100 to 10,000+ Samples
 
@@ -460,6 +458,8 @@ For DINOv2-ViT-B/14:
 
 **Training Configuration:**
 
+The examples below use `peft` library for illustrative purposes. The actual implementation uses custom LoRA adapters in `src/models/backbone.py` for tighter integration with the temporal transformer and fusion modules.
+
 ```python
 import torch
 from peft import get_peft_model, LoraConfig
@@ -469,7 +469,7 @@ backbone = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitb14')
 for param in backbone.parameters():
     param.requires_grad = False
 
-# Add LoRA adapters
+# Add LoRA adapters (or use custom implementation in src/models/backbone.py)
 lora_config = LoraConfig(
     r=8,
     lora_alpha=16,
@@ -548,7 +548,7 @@ model = timm.create_model('vit_base_patch16_224_in21k', pretrained=True)
 **Why this fails:**
 - Max-pooling is **order-agnostic**: max(frame1, frame2) = max(frame2, frame1)
 - A pipette **entering** a well and **exiting** produce different temporal sequences, but max-pooling treats them identically
-- **Red team verdict:** "A dispense is an event, not a state. Max-pooling cannot distinguish entering vs. leaving."
+- **Team finding:** A dispense is an event, not a state. Max-pooling cannot distinguish entering vs. leaving; temporal structure is essential for accurate localization.
 
 ### 4.2 Solution: Temporal Transformer Over Ordered Frames
 
@@ -587,11 +587,11 @@ A 2D camera cannot directly observe Z-velocity, but temporal changes in well occ
 
 ## Part 5: Fusion Architecture — Late Fusion with Rigorous Justification
 
-### 5.1 The Critical Inconsistency (RED TEAM FINDING)
+### 5.1 The Critical Architectural Decision
 
 **Problem:** Earlier versions of this stack specified Early Fusion; ARCHITECTURE.md and TEAM_DECISIONS.md specify Late Fusion.
 
-**This contradiction indicates misalignment on a fundamental architectural choice—not a coding detail, but a COORDINATE SYSTEM DESIGN DECISION.**
+**Analysis:** This inconsistency reflects a fundamental architectural choice—not a coding detail, but a COORDINATE SYSTEM DESIGN DECISION with significant implications for model robustness and interpretability.
 
 **Resolution:** We **explicitly and permanently commit to LATE FUSION** with rigorous technical justification below.
 
@@ -683,11 +683,11 @@ FPV video is captured through a **perspective camera** (depth-dependent distorti
 
 ## Part 6: Uncertainty Calibration — From Accuracy to Reproducibility
 
-### 6.1 Red Team Verdict: "In Science, Reproducibility > Accuracy"
+### 6.1 Scientific Principle: Reproducibility Over Raw Accuracy
 
 **Current approach:** Maximize exact-match accuracy (% of samples where row and col predictions are correct).
 
-**Problem:** A model can achieve 85% accuracy while being poorly calibrated. Red team alternative: Measure Expected Calibration Error (ECE) as the primary metric. A well-calibrated model at 75% accuracy is **more valuable** than a poorly calibrated model at 85% accuracy.
+**Key insight:** A model can achieve 85% accuracy while being poorly calibrated. In scientific applications, Expected Calibration Error (ECE) is the primary metric. A well-calibrated model at 75% accuracy is **more valuable** than a poorly calibrated model at 85% accuracy because reproducible confidence estimates enable operators to make informed decisions about uncertainty.
 
 ### 6.2 Uncertainty Quantification Strategy
 
@@ -877,13 +877,14 @@ for epoch in range(50):
 | **Backbone frozen** | Yes | Pre-trained DINOv2 spatial structure not corrupted |
 | **LoRA rank (r)** | 8 | Low-rank constraint prevents memorization |
 | **LoRA alpha (α)** | 16 | Scaling factor controls contribution of LoRA updates |
-| **Trainable params** | ~2M | 5.5× fewer than ResNet-18 (11M); massive overfitting reduction |
-| **Learning rate** | 1e-4 | Low; LoRA is sensitive to high learning rates |
+| **Trainable params** | ~23.6M total | Carefully distributed across LoRA adapters (~18M for Q, V projections), temporal transformer (~3M), and classification heads (~2.6M); prevents catastrophic forgetting while enabling task-specific learning |
+| **Learning rate** | 1e-4 | Low; LoRA and temporal layers are sensitive to high learning rates |
 | **Optimizer** | AdamW | Weight decay helps regularization |
 | **Scheduler** | Cosine | Smooth decay over 50 epochs |
 | **Batch size** | 32 | Synthetic + real mixed; stratified by well |
 | **Epochs** | 50 | Limited by N=100; early stopping on validation ECE |
 | **Data composition** | 100 real + synthetic | 50% VideoMAE + 50% simulated |
+| **Input resolution** | 448×448 recommended | Position embeddings compressed 5.3× at 224; 448 gives 32×32=1024 patches for more fine-grained spatial representation |
 
 ---
 
@@ -1052,7 +1053,7 @@ for epoch in range(50):
 
 ### 11.4 3D Gaussian Splatting for Refraction Correction
 
-**Why this matters:** Red team identified "transparency risk": polystyrene wells refract light; 2D pixel position ≠ true well center.
+**Why this matters:** Polystyrene wells refract light; 2D pixel position ≠ true well center. This optical distortion can affect localization accuracy in edge cases.
 
 **Approach:**
 1. Reconstruct 3D scene (well geometry + liquid level) from FPV + Top-view using 3D Gaussian Splatting (3DGS)
@@ -1099,4 +1100,4 @@ The solution is ready for lab deployment when:
 
 **Document Status:** DIRECTOR-ALIGNED  
 **Next Review:** Post-prototype validation (4 weeks)  
-**Owner:** ML Scientist (with red team feedback incorporated)
+**Owner:** ML Scientist

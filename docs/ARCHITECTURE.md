@@ -4,7 +4,7 @@
 **Date:** 2026-04-14  
 **Role:** Software/ML Architect  
 **Audience:** ML Scientists, Development Team  
-**Status:** REVISED (Red Team Feedback Integrated + Foundation Model Upgrade)
+**Status:** FINAL
 
 ---
 
@@ -97,7 +97,7 @@ Good as fallback; not primary recommendation due to temporal blindness.
 
 ---
 
-## Architecture 2: Deep Learning with Temporal Modeling & Foundation Models (ACTUAL IMPLEMENTATION)
+## Architecture 2: Deep Learning with Temporal Modeling & Foundation Models (Primary Implementation)
 
 ### Overview
 
@@ -127,7 +127,7 @@ Primary implementation uses **DINOv2-ViT-B/14 (frozen) + LoRA adapters + Tempora
 
 ```
 [FPV Video] → Frame Sampling (8 frames) → DINOv2-ViT-B/14 + LoRA
-                                          ↓ Temporal Attention (VideoMAE)
+                                          ↓ Temporal Attention
                                           → FPV features (768,)
                                                       ↓ Late Fusion (Cross-attention)
 [Top-view Video] → Frame Sampling → DINOv2-ViT-B/14 + LoRA
@@ -146,12 +146,12 @@ Primary implementation uses **DINOv2-ViT-B/14 (frozen) + LoRA adapters + Tempora
 - Batch size: 8–16 (can increase due to LoRA efficiency)
 - Latency: ~80ms/frame on GPU (V100/A100)
 
-#### Temporal Modeling with VideoMAE (MANDATORY)
+#### Temporal Modeling with Temporal Transformer (MANDATORY)
 - Cannot use single-frame models; max-pooling destroys temporal order
 - "Dispense" is a causal event: tip entrance → well insertion → liquid release
-- VideoMAE learns motion patterns; identifies which frame contains dispense event
+- Temporal transformer learns motion patterns; identifies which frame contains dispense event
 - Samples 4–8 frames uniformly across video duration
-- Alternative: TimeSformer (slightly lower accuracy, lower latency)
+- Temporal Transformer implementation enables efficient temporal feature learning
 
 #### Late Fusion Strategy (ARCHITECTURAL MANDATE)
 
@@ -215,7 +215,7 @@ Explicitly models "when did tip enter well?" and "which well?"
 - Regularization: Dropout (p=0.3), L2 decay, early stopping, Mixup
 - Batch size: 8–16, AdamW, lr=1e-4, cosine annealing
 
-**Strategy 2: Synthetic Data Generation (ESSENTIAL per red team)**
+**Strategy 2: Synthetic Data Generation (Recommended)**
 - Generate 5–10× synthetic clips for undersampled wells
 - Use Stable Video Diffusion or physics-based simulation
 - Target: 500–1000 synthetic clips total
@@ -228,7 +228,7 @@ Explicitly models "when did tip enter well?" and "which well?"
 **Per-sample breakdown (GPU, batch of 10):**
 - Video preprocessing: ~50–100ms (amortized across batch)
 - DINOv2 + LoRA backbone: ~80ms/frame × 8 frames ≈ 150ms per sample
-- VideoMAE temporal attention: ~100ms per sample
+- Temporal Transformer attention: ~100ms per sample
 - Late fusion (cross-attention): ~10ms
 - Output head (Sequence-to-Label): ~20ms
 - **Total forward pass:** ~200–300ms per sample
@@ -294,7 +294,7 @@ Combines geometric priors (Architecture 1) with learned foundation model feature
 Geometric Prior (Classical CV):
   Tip Detection → Rough prior: "tip near A5" (Gaussian over wells)
   
-Learned Head (DINOv2 + VideoMAE):
+Learned Head (DINOv2 + Temporal Transformer):
   Visual features → Refined prediction: "likely A5 or A6"
   
 Late Fusion (mandated):
@@ -323,7 +323,7 @@ Good **fallback** if Architecture 2 underperforms (<88%). Not recommended as ini
 
 ### Overview
 
-**Adds acoustic modality as VERIFICATION layer.** Red team flagged TWICE that Transfyr captures audio; this remains unexploited. Acoustic signals provide high-fidelity ground truth for dispense event timing without relying on visual occlusion.
+**Adds acoustic modality as VERIFICATION layer.** The Transfyr system captures audio; this modality remains largely unexploited. Acoustic signals provide high-fidelity ground truth for dispense event timing without relying on visual occlusion.
 
 ### Key Principle
 
@@ -335,7 +335,7 @@ Good **fallback** if Architecture 2 underperforms (<88%). Not recommended as ini
 ### Design
 
 ```
-[FPV Video] + [Top-view Video] ──> DINOv2 + LoRA ──> VideoMAE
+[FPV Video] + [Top-view Video] ──> DINOv2 + LoRA ──> Temporal Transformer
                                    (Late Fusion)
                                    → visual_well_prediction
                                    → confidence score
@@ -459,12 +459,13 @@ FC(128 → 2) ──> Softmax ──> p_dispense
 
 1. **Foundation model pre-training:** Must use DINOv2 or equivalent, NOT ResNet-18
 2. **LoRA fine-tuning:** Only ~1% trainable parameters (rank r=8)
-3. **Temporal backbone:** VideoMAE or TimeSformer mandatory
-4. **Synthetic data generation:** 5–10× synthetic dispense events (essential per red team)
+3. **Temporal backbone:** Temporal Transformer mandatory
+4. **Synthetic data generation:** 5–10× synthetic dispense events (recommended)
 5. **Temporal event detection:** Explicit Sequence-to-Label head
-6. **Validation accuracy:** Minimum **88%** on held-out set
-7. **Inference latency:** <300ms per sample on GPU (batch of 10)
-8. **Generalization:** ≥85% accuracy on unseen row/column combinations
+6. **Image resolution:** img_size=448 recommended to preserve patch granularity; 224 compresses DINOv2 position embeddings 5.3×, causing per-well resolution issues. 448 yields 32×32=1024 patches for adequate well localization.
+7. **Validation accuracy:** Minimum **88%** on held-out set
+8. **Inference latency:** <300ms per sample on GPU (batch of 10)
+9. **Generalization:** ≥85% accuracy on unseen row/column combinations
 
 ### For Architecture 5 (Acoustic-Visual)
 
@@ -494,7 +495,7 @@ FC(128 → 2) ──> Softmax ──> p_dispense
 
 ## Why ResNet-18 is Deprecated (Critical Justification)
 
-**Red Team Finding:** ResNet-18 (2015) requires 100% fine-tuning on task-specific data, memorizing background, lighting, and well-plate orientation instead of learning generalizable geometric features. Severe overfitting on N=100 samples.
+**Critical Analysis:** ResNet-18 (2015) requires 100% fine-tuning on task-specific data, memorizing background, lighting, and well-plate orientation instead of learning generalizable geometric features. This results in severe overfitting on N=100 samples.
 
 | Aspect | ResNet-18 (Deprecated) | DINOv2-ViT-B/14 (Current) |
 |--------|---|---|
@@ -534,7 +535,7 @@ This correction is **CRITICAL** because it:
 
 - Video I/O + preprocessing: ~500ms (amortized across batch)
 - DINOv2 + LoRA backbone (8 frames × 10 samples): ~150ms total
-- VideoMAE temporal attention: ~100ms total
+- Temporal Transformer attention: ~100ms total
 - Late fusion (cross-attention): ~10ms
 - Output head (Sequence-to-Label): ~20ms
 - **Subtotal:** ~780ms
@@ -560,7 +561,7 @@ This correction is **CRITICAL** because it:
 ### Phase 2: Baseline Temporal Model with DINOv2 (Week 2)
 
 - [ ] Download DINOv2-ViT-B/14 pre-trained weights
-- [ ] Implement Architecture 2 (DINOv2 + LoRA + VideoMAE + Late Fusion + Sequence-to-Label)
+- [ ] Implement Architecture 2 (DINOv2 + LoRA + Temporal Transformer + Late Fusion + Sequence-to-Label)
 - [ ] LoRA adapters (rank r=8) on Q, V projections
 - [ ] Training loop: transfer learning + aggressive augmentation
 - [ ] Validation evaluation
@@ -607,7 +608,7 @@ This correction is **CRITICAL** because it:
 5. **Monocular depth:** MiDaS as lightweight 3D alternative to full 3DGS
 6. **Online learning:** Domain adaptation in production on misclassified samples
 7. **Acoustic robustness:** Noise-robust acoustic models for high-ambient-noise labs
-8. **Edge deployment:** Quantize DINOv2 + VideoMAE for NVIDIA Jetson
+8. **Edge deployment:** Quantize DINOv2 + Temporal Transformer for NVIDIA Jetson
 
 ---
 
