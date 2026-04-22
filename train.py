@@ -356,6 +356,8 @@ class Trainer:
         patience: int = 20,
         grad_clip: float = 1.0,
         focal_alpha: float = 0.75,
+        focal_gamma: float = 0.0,
+        col_weight: float = 2.0,
         well_consistency_weight: float = 0.2,
     ):
         """Initialize trainer."""
@@ -369,6 +371,8 @@ class Trainer:
         self.patience = patience
         self.grad_clip = grad_clip
         self.focal_alpha = focal_alpha
+        self.focal_gamma = focal_gamma
+        self.col_weight = col_weight
         self.well_consistency_weight = well_consistency_weight
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -379,10 +383,12 @@ class Trainer:
 
         self.optimizer = optim.AdamW(trainable_params, lr=lr, weight_decay=weight_decay)
 
-        # Loss function: focal loss + well-level consistency loss
-        # F-4: well_consistency_weight lowered from 0.5 to 0.2 (configurable via --well_consistency_weight)
+        # Loss function: weighted BCE (gamma=0) or focal loss (gamma>0) + well-level consistency loss
+        # col_weight=2.0: diagnostic shows column max sigmoid (~0.32) lags row (~0.54); upweight to close gap
         self.criterion = WellDetectionLoss(
-            gamma=2.0, alpha=focal_alpha, well_consistency_weight=well_consistency_weight,
+            gamma=focal_gamma, alpha=focal_alpha,
+            col_weight=col_weight,
+            well_consistency_weight=well_consistency_weight,
         )
 
         # LR scheduler with warmup
@@ -596,6 +602,13 @@ def main():
     parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
                         help='Backbone architecture (dinov2 or resnet18 for CPU training)')
     parser.add_argument('--focal_alpha', type=float, default=0.75, help='Focal loss alpha — weight for positive class (default 0.75; was 0.25)')
+    parser.add_argument('--focal_gamma', type=float, default=0.0, help='Focal loss gamma — focusing parameter (default 0.0 = plain weighted BCE; use 2.0 for focal loss)')
+    parser.add_argument('--col_weight', type=float, default=2.0,
+                        help='Loss weight for column head (default 2.0 — upweights column discrimination which lags row)')
+    parser.add_argument('--lora_rank', type=int, default=4,
+                        help='LoRA adapter rank (default 4; was 8 — reduced to limit overfitting on 80 samples)')
+    parser.add_argument('--temporal_layers', type=int, default=1,
+                        help='Temporal attention layers (default 1; was 2 — reduced to cut trainable params)')
     parser.add_argument('--patience', type=int, default=20,
                         help='Early stopping patience in epochs (default 20; was 10 in v4 — too aggressive)')
     parser.add_argument('--well_consistency_weight', type=float, default=0.2,
@@ -645,7 +658,8 @@ def main():
         num_columns=12,
         shared_backbone=True,
         use_lora=True,
-        lora_rank=8,
+        lora_rank=args.lora_rank,
+        temporal_layers=args.temporal_layers,
         use_dinov2=use_dinov2,
         img_size=args.img_size,
     )
@@ -662,6 +676,8 @@ def main():
         lr=args.lr,
         weight_decay=args.weight_decay,
         focal_alpha=args.focal_alpha,
+        focal_gamma=args.focal_gamma,
+        col_weight=args.col_weight,
         patience=args.patience,
         well_consistency_weight=args.well_consistency_weight,
     )

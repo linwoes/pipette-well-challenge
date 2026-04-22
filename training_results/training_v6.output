@@ -1,0 +1,25 @@
+2026-04-22 08:18:10,744 - INFO - Device: cpu
+2026-04-22 08:18:10,744 - INFO - Loading dataset...
+2026-04-22 08:18:10,745 - INFO - Loaded 100 labels
+2026-04-22 08:18:10,745 - INFO - Label validation passed: 100 entries, 100 unique clips
+2026-04-22 08:18:10,753 - INFO - Train size: 80, Val size: 20
+2026-04-22 08:18:10,753 - INFO - Building model with dinov2 backbone...
+Using cache found in /Users/bwaite/.cache/torch/hub/facebookresearch_dinov2_main
+/Users/bwaite/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/Users/bwaite/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/Users/bwaite/pipette-well-challenge/src/models/backbone.py:196: UserWarning: torch.hub load failed: unsupported operand type(s) for |: 'type' and 'NoneType'. Trying timm fallback...
+  warnings.warn(f"torch.hub load failed: {e}. Trying timm fallback...")
+2026-04-22 08:18:13,267 - INFO - Loading pretrained weights from Hugging Face hub (timm/vit_base_patch14_dinov2.lvd142m)
+2026-04-22 08:18:13,446 - INFO - HTTP Request: HEAD https://huggingface.co/timm/vit_base_patch14_dinov2.lvd142m/resolve/main/model.safetensors "HTTP/1.1 302 Found"
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-04-22 08:18:13,447 - WARNING - Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-04-22 08:18:13,449 - INFO - [timm/vit_base_patch14_dinov2.lvd142m] Safe alternative available for 'pytorch_model.bin' (as 'model.safetensors'). Loading weights using safetensors.
+2026-04-22 08:18:13,495 - INFO - Resized position embedding: (37, 37) to (32, 32).
+2026-04-22 08:18:14,180 - INFO - Loaded DINOv2 via timm (img_size=448)
+2026-04-22 08:18:14,219 - INFO - Trainable parameters: 12,260,116
+2026-04-22 08:18:14,219 - INFO - Starting training: epochs 1–20
+2026-04-22 08:18:14,219 - INFO - 
+Epoch 1/20
+Training:   0%|          | 0/20 [00:00<?, ?it/s]

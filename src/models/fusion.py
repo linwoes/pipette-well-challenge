@@ -274,19 +274,18 @@ class DualViewFusion(nn.Module):
         B, N, C, H, W = fpv_frames.shape
 
         # Process FPV frames through backbone
-        fpv_flat = fpv_frames.reshape(B * N, C, H, W)  # (B*N, 3, 224, 224)
-        with torch.no_grad():
-            fpv_features = self.backbone_fpv(fpv_flat)  # (B*N, 768)
+        # LoRA adapters are trainable — do NOT wrap in no_grad so they receive gradients.
+        # The frozen base weights remain non-differentiable via requires_grad=False.
+        fpv_flat = fpv_frames.reshape(B * N, C, H, W)  # (B*N, 3, H, W)
+        fpv_features = self.backbone_fpv(fpv_flat)      # (B*N, 768)
         fpv_features = fpv_features.reshape(B, N, -1)  # (B, N, 768)
 
         # Process TopView frames through backbone
-        topview_flat = topview_frames.reshape(B * N, C, H, W)  # (B*N, 3, 224, 224)
+        topview_flat = topview_frames.reshape(B * N, C, H, W)  # (B*N, 3, H, W)
         if self.shared_backbone:
-            with torch.no_grad():
-                topview_features = self.backbone_fpv(topview_flat)  # (B*N, 768)
+            topview_features = self.backbone_fpv(topview_flat)      # (B*N, 768)
         else:
-            with torch.no_grad():
-                topview_features = self.backbone_topview(topview_flat)  # (B*N, 768)
+            topview_features = self.backbone_topview(topview_flat)  # (B*N, 768)
         topview_features = topview_features.reshape(B, N, -1)  # (B, N, 768)
 
         # Apply temporal attention to each view
