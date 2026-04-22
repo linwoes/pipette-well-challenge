@@ -26,8 +26,10 @@ LABELS="${LABELS:-${DATA_DIR}/labels.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints}"
 
 # ── Device auto-detect ─────────────────────────────────────────────────────
+PYTHON="${PYTHON:-python3}"
+
 if [ -z "${DEVICE:-}" ]; then
-    if python -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
+    if "${PYTHON}" -c "import torch; exit(0 if torch.cuda.is_available() else 1)" 2>/dev/null; then
         DEVICE="cuda"
         echo "[run_training.sh] CUDA available — training on GPU"
     else
@@ -60,7 +62,7 @@ echo "  IMG_SIZE       : ${IMG_SIZE}  FRAMES: ${NUM_FRAMES}  BATCH: ${BATCH_SIZE
 echo "  FOCAL_GAMMA    : ${FOCAL_GAMMA}  COL_WEIGHT: ${COL_WEIGHT}"
 echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
 
-python "${REPO_ROOT}/train.py" \
+"${PYTHON}" "${REPO_ROOT}/train.py" \
   --data_dir                "${DATA_DIR}" \
   --labels                  "${LABELS}" \
   --epochs                  "${EPOCHS}" \
