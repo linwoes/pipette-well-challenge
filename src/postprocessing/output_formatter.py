@@ -148,6 +148,46 @@ def _sort_wells(wells: List[Dict]) -> List[Dict]:
     return sorted(wells, key=lambda w: (ord(w['well_row']) - ord('A'), w['well_column']))
 
 
+def logits_to_wells_typed(
+    row_logits: np.ndarray,
+    col_logits: np.ndarray,
+    type_logits: np.ndarray,
+) -> List[Dict]:
+    """
+    Type-conditioned well prediction — no threshold required.
+
+    Uses the clip-type prediction to choose an argmax strategy:
+      - Type 0 (single well):  top-1 row × top-1 col  → 1 well
+      - Type 1 (full row):     top-1 row × all 12 cols → 12 wells
+      - Type 2 (full column):  all 8 rows × top-1 col  → 8 wells
+
+    Args:
+        row_logits:  (8,)  row logits
+        col_logits:  (12,) column logits
+        type_logits: (3,)  clip-type logits
+
+    Returns:
+        List of well dicts with well_row and well_column
+    """
+    row_letters = 'ABCDEFGH'
+    row_probs = _sigmoid(row_logits)
+    col_probs = _sigmoid(col_logits)
+    clip_type = int(np.argmax(type_logits))
+
+    if clip_type == 1:  # full row: 1 row, all columns
+        r = int(np.argmax(row_probs))
+        wells = [{'well_row': row_letters[r], 'well_column': c + 1} for c in range(12)]
+    elif clip_type == 2:  # full column: all rows, 1 column
+        c = int(np.argmax(col_probs))
+        wells = [{'well_row': row_letters[r], 'well_column': c + 1} for r in range(8)]
+    else:  # single well: top-1 row, top-1 col
+        r = int(np.argmax(row_probs))
+        c = int(np.argmax(col_probs))
+        wells = [{'well_row': row_letters[r], 'well_column': c + 1}]
+
+    return _sort_wells(wells)
+
+
 def logits_to_wells_adaptive(
     row_logits: np.ndarray,
     col_logits: np.ndarray,

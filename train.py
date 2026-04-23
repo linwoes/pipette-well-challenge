@@ -359,6 +359,7 @@ class Trainer:
         focal_gamma: float = 0.0,
         col_weight: float = 2.0,
         well_consistency_weight: float = 0.2,
+        type_loss_weight: float = 1.0,
     ):
         """Initialize trainer."""
         self.model = model
@@ -374,6 +375,7 @@ class Trainer:
         self.focal_gamma = focal_gamma
         self.col_weight = col_weight
         self.well_consistency_weight = well_consistency_weight
+        self.type_loss_weight = type_loss_weight
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -389,6 +391,7 @@ class Trainer:
             gamma=focal_gamma, alpha=focal_alpha,
             col_weight=col_weight,
             well_consistency_weight=well_consistency_weight,
+            type_loss_weight=type_loss_weight,
         )
 
         # LR scheduler with warmup
@@ -430,8 +433,8 @@ class Trainer:
             # Mixed precision forward pass
             if self.scaler is not None:
                 with torch.cuda.amp.autocast():
-                    row_logits, col_logits = self.model(fpv, topview)
-                    loss = self.criterion(row_logits, col_logits, row_labels, col_labels)
+                    row_logits, col_logits, type_logits = self.model(fpv, topview)
+                    loss = self.criterion(row_logits, col_logits, type_logits, row_labels, col_labels)
 
                 # Backward with scale
                 self.scaler.scale(loss).backward()
@@ -440,8 +443,8 @@ class Trainer:
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
-                row_logits, col_logits = self.model(fpv, topview)
-                loss = self.criterion(row_logits, col_logits, row_labels, col_labels)
+                row_logits, col_logits, type_logits = self.model(fpv, topview)
+                loss = self.criterion(row_logits, col_logits, type_logits, row_labels, col_labels)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_clip)
                 self.optimizer.step()
@@ -457,6 +460,7 @@ class Trainer:
 
         all_row_preds = []
         all_col_preds = []
+        all_type_preds = []
         all_row_targets = []
         all_col_targets = []
 
@@ -467,48 +471,42 @@ class Trainer:
                 row_labels = row_labels.to(self.device)
                 col_labels = col_labels.to(self.device)
 
-                row_logits, col_logits = self.model(fpv, topview)
-                loss = self.criterion(row_logits, col_logits, row_labels, col_labels)
+                row_logits, col_logits, type_logits = self.model(fpv, topview)
+                loss = self.criterion(row_logits, col_logits, type_logits, row_labels, col_labels)
 
                 total_loss += loss.item()
 
-                # Convert to predictions
-                row_probs = torch.sigmoid(row_logits).cpu().numpy()
-                col_probs = torch.sigmoid(col_logits).cpu().numpy()
-
-                all_row_preds.append(row_probs)
-                all_col_preds.append(col_probs)
+                all_row_preds.append(row_logits.cpu().numpy())
+                all_col_preds.append(col_logits.cpu().numpy())
+                all_type_preds.append(type_logits.cpu().numpy())
                 all_row_targets.append(row_labels.cpu().numpy())
                 all_col_targets.append(col_labels.cpu().numpy())
 
         # Compute metrics.
         # v6 post-mortem: threshold=0.3 showed 0% exact match throughout 50 epochs,
-        # but diagnostic sweep revealed threshold=0.4 gives 60% on the same checkpoint.
-        # The model was learning correctly — the evaluation threshold was wrong.
-        # v7 fix: use 0.4. This matches the model's learned output scale (active
-        # row/col sigmoids cluster around 0.5–0.9; threshold=0.3 admitted too many
-        # false positives while threshold=0.4 correctly excludes inactive rows/cols).
-        row_preds_all = np.vstack(all_row_preds)
-        col_preds_all = np.vstack(all_col_preds)
+        # v8: type-conditioned evaluation — no threshold.
+        # The type head predicts single(0)/full-row(1)/full-col(2), which
+        # selects an argmax strategy: top-1×top-1 / top-1-row×all-cols /
+        # all-rows×top-1-col.  This eliminates the threshold sensitivity that
+        # caused exact_match to show 0% throughout v6 and v7 training even
+        # though the underlying probabilities were correct.
+        from src.postprocessing.output_formatter import logits_to_wells_typed
+        row_preds_all   = np.vstack(all_row_preds)
+        col_preds_all   = np.vstack(all_col_preds)
+        type_preds_all  = np.vstack(all_type_preds)
         row_targets_all = np.vstack(all_row_targets)
         col_targets_all = np.vstack(all_col_targets)
-
-        val_threshold = 0.4
-        row_preds_binary = (row_preds_all > val_threshold).astype(int)
-        col_preds_binary = (col_preds_all > val_threshold).astype(int)
 
         exact_match_scores = []
         jaccard_scores = []
         cardinality_scores = []
         row_letters = 'ABCDEFGH'
-        for i in range(len(row_preds_binary)):
-            row_pred_idx = np.where(row_preds_binary[i])[0]
-            col_pred_idx = np.where(col_preds_binary[i])[0]
+        for i in range(len(row_preds_all)):
+            pred_wells = logits_to_wells_typed(
+                row_preds_all[i], col_preds_all[i], type_preds_all[i]
+            )
             row_target_idx = np.where(row_targets_all[i])[0]
             col_target_idx = np.where(col_targets_all[i])[0]
-
-            pred_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
-                          for r in row_pred_idx for c in col_pred_idx]
             target_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
                             for r in row_target_idx for c in col_target_idx]
 
@@ -612,6 +610,8 @@ def main():
                         help='Temporal attention layers (default 1; was 2 — reduced to cut trainable params)')
     parser.add_argument('--patience', type=int, default=20,
                         help='Early stopping patience in epochs (default 20; was 10 in v4 — too aggressive)')
+    parser.add_argument('--type_loss_weight', type=float, default=1.0,
+                        help='Weight for clip-type cross-entropy loss (default 1.0; 0.0 to disable)')
     parser.add_argument('--well_consistency_weight', type=float, default=0.2,
                         help='Weight for outer-product well-level consistency loss (default 0.2; was 0.5 in v4)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
@@ -692,6 +692,7 @@ def main():
         col_weight=args.col_weight,
         patience=args.patience,
         well_consistency_weight=args.well_consistency_weight,
+        type_loss_weight=args.type_loss_weight,
     )
     trainer._model_config = model_config
 

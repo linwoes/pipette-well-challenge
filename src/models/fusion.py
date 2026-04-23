@@ -254,22 +254,27 @@ class DualViewFusion(nn.Module):
         # Factorized output heads (no activation — raw logits)
         self.row_head = nn.Linear(output_dim, num_rows)
         self.col_head = nn.Linear(output_dim, num_columns)
+        # Clip-type head: 0=single-well, 1=full-row, 2=full-col
+        # Eliminates threshold sensitivity: type prediction selects the
+        # argmax strategy instead of relying on any fixed sigmoid threshold.
+        self.type_head = nn.Linear(output_dim, 3)
 
     def forward(
         self,
         fpv_frames: torch.Tensor,
         topview_frames: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through dual-view fusion model.
 
         Args:
-            fpv_frames: (B, N, 3, 224, 224) FPV video frames
-            topview_frames: (B, N, 3, 224, 224) top-view video frames
+            fpv_frames: (B, N, 3, H, W) FPV video frames
+            topview_frames: (B, N, 3, H, W) top-view video frames
 
         Returns:
-            row_logits: (B, 8) raw row predictions
-            col_logits: (B, 12) raw column predictions
+            row_logits:  (B, 8)  raw row predictions
+            col_logits:  (B, 12) raw column predictions
+            type_logits: (B, 3)  clip-type logits (single/row/col)
         """
         B, N, C, H, W = fpv_frames.shape
 
@@ -299,10 +304,11 @@ class DualViewFusion(nn.Module):
         shared_repr = self.fusion_mlp(fused)  # (B, 256)
 
         # Factorized heads: output raw logits
-        row_logits = self.row_head(shared_repr)  # (B, 8)
-        col_logits = self.col_head(shared_repr)  # (B, 12)
+        row_logits  = self.row_head(shared_repr)   # (B, 8)
+        col_logits  = self.col_head(shared_repr)   # (B, 12)
+        type_logits = self.type_head(shared_repr)  # (B, 3)
 
-        return row_logits, col_logits
+        return row_logits, col_logits, type_logits
 
 
 class WellDetectionLoss(nn.Module):
@@ -323,19 +329,18 @@ class WellDetectionLoss(nn.Module):
         row_weight: float = 1.0,
         col_weight: float = 1.0,
         well_consistency_weight: float = 0.5,
+        type_loss_weight: float = 1.0,
     ):
         """
-        Initialize focal loss with optional well-level consistency term.
+        Initialize focal loss with clip-type supervision and well-level consistency.
 
         Args:
             gamma: Focusing parameter (default 2.0)
-            alpha: Weighting factor for positive class (default 0.75). Set > 0.5 to
-                upweight the rare positive wells in a 96-well plate (~96% negatives).
+            alpha: Weighting factor for positive class (default 0.75)
             row_weight: Weight for row loss (default 1.0)
             col_weight: Weight for column loss (default 1.0)
-            well_consistency_weight: Weight for the outer-product well-level
-                BCE loss that bridges the row/col factor gap (default 0.5).
-                Set to 0.0 to disable.
+            well_consistency_weight: Weight for outer-product consistency loss (default 0.5)
+            type_loss_weight: Weight for clip-type cross-entropy loss (default 1.0)
         """
         super().__init__()
         self.gamma = gamma
@@ -343,42 +348,53 @@ class WellDetectionLoss(nn.Module):
         self.row_weight = row_weight
         self.col_weight = col_weight
         self.well_consistency_weight = well_consistency_weight
+        self.type_loss_weight = type_loss_weight
 
     def forward(
         self,
         row_logits: torch.Tensor,
         col_logits: torch.Tensor,
+        type_logits: torch.Tensor,
         row_targets: torch.Tensor,
         col_targets: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Compute focal loss for row and column predictions.
+        Compute focal loss for row/col predictions plus clip-type cross-entropy.
 
-        The loss has three components:
+        Loss components:
           1. Row focal loss — per-row binary classification
           2. Column focal loss — per-column binary classification
-          3. Well consistency loss — BCE on the 8×12 outer product of
-             row/col probabilities vs the outer product of row/col targets.
-             This provides a direct gradient signal toward the Cartesian
-             product that exact_match and Jaccard actually measure.
+          3. Clip-type cross-entropy — 3-class: single(0)/full-row(1)/full-col(2)
+          4. Well consistency loss — BCE on the outer-product probability map
 
         Args:
-            row_logits: (B, 8) raw row predictions
-            col_logits: (B, 12) raw column predictions
-            row_targets: (B, 8) binary row targets
+            row_logits:  (B, 8)  raw row predictions
+            col_logits:  (B, 12) raw column predictions
+            type_logits: (B, 3)  clip-type logits
+            row_targets: (B, 8)  binary row targets
             col_targets: (B, 12) binary column targets
 
         Returns:
             loss: Scalar combined loss
         """
-        # Compute focal loss for rows
+        # Compute focal loss for rows and columns
         row_loss = self._focal_loss(row_logits, row_targets)
-
-        # Compute focal loss for columns
         col_loss = self._focal_loss(col_logits, col_targets)
-
-        # Weighted combination of factored losses
         total_loss = self.row_weight * row_loss + self.col_weight * col_loss
+
+        # Clip-type cross-entropy: derive GT type from row/col label cardinalities.
+        # Type 0 = single well  (active_rows==1, active_cols==1)
+        # Type 1 = full row     (active_rows==1, active_cols==12)
+        # Type 2 = full column  (active_rows==8, active_cols==1)
+        if self.type_loss_weight > 0:
+            active_rows = row_targets.sum(dim=1)   # (B,)
+            active_cols = col_targets.sum(dim=1)   # (B,)
+            type_targets = torch.zeros(row_logits.size(0), dtype=torch.long,
+                                       device=row_logits.device)
+            type_targets[(active_rows == 1) & (active_cols == col_logits.size(1))] = 1
+            type_targets[(active_rows == row_logits.size(1)) & (active_cols == 1)] = 2
+            type_loss = F.cross_entropy(type_logits, type_targets)
+            total_loss = total_loss + self.type_loss_weight * type_loss
 
         # Well-level consistency loss: outer product of probabilities.
         # This loss is only valid when the ground truth well set is exactly

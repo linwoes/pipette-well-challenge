@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_training.sh — v7 training launcher
+# run_training.sh — v8 training launcher
 #
 # S-3 FIX: Replaced hardcoded absolute paths with env-var overrides.
 # S-3 FIX: Device auto-detected (CUDA if available, else CPU).
@@ -8,9 +8,9 @@
 # v6:  LoRA gradient flow fix (removed no_grad from backbone calls).
 #       focal_gamma=0, col_weight=2.0, lora_rank=4, temporal_layers=1.
 # v7:  val_threshold 0.3→0.4 (diagnostic showed 0.3 masked 60% exact match).
-#       epochs 50→80 (model still improving at epoch 50, no early stop triggered).
-#       resume from v6 best.pt checkpoint (epoch 28, val_loss=0.4294) so v7
-#       continues fine-tuning rather than restarting from scratch.
+# v8:  Clip-type head: 3-class (single/row/col) + type_loss_weight=1.0.
+#       Type-conditioned inference: argmax strategy, no threshold at all.
+#       Architecture change → cannot resume from v7; fresh training from DINOv2.
 #
 # Usage:
 #   bash run_training.sh                      # use defaults
@@ -51,10 +51,11 @@ FOCAL_GAMMA="${FOCAL_GAMMA:-0.0}"              # v6: plain weighted BCE (was 2.0
 COL_WEIGHT="${COL_WEIGHT:-2.0}"                # v6: upweight column head
 LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
-RESUME="${RESUME:-${OUTPUT_DIR}/best.pt}"      # v7: resume from v6 checkpoint
+TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
+# No RESUME — v8 adds type_head to architecture, incompatible with v7 checkpoint
 
 # ── Launch ─────────────────────────────────────────────────────────────────
-echo "[run_training.sh] Starting training v7"
+echo "[run_training.sh] Starting training v8"
 echo "  DATA_DIR       : ${DATA_DIR}"
 echo "  LABELS         : ${LABELS}"
 echo "  OUTPUT         : ${OUTPUT_DIR}"
@@ -63,6 +64,7 @@ echo "  EPOCHS         : ${EPOCHS}  PATIENCE: ${PATIENCE}"
 echo "  IMG_SIZE       : ${IMG_SIZE}  FRAMES: ${NUM_FRAMES}  BATCH: ${BATCH_SIZE}"
 echo "  FOCAL_GAMMA    : ${FOCAL_GAMMA}  COL_WEIGHT: ${COL_WEIGHT}"
 echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
+echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
 
 "${PYTHON}" "${REPO_ROOT}/train.py" \
   --data_dir                "${DATA_DIR}" \
@@ -80,5 +82,5 @@ echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
   --col_weight              "${COL_WEIGHT}" \
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
-  --resume                  "${RESUME}" \
+  --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
   2>&1 | tee "${REPO_ROOT}/training.log"
