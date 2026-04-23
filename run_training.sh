@@ -1,15 +1,16 @@
 #!/bin/bash
-# run_training.sh — v6 training launcher
+# run_training.sh — v7 training launcher
 #
 # S-3 FIX: Replaced hardcoded absolute paths with env-var overrides.
 # S-3 FIX: Device auto-detected (CUDA if available, else CPU).
 # F-3 FIX: early_stopping_patience increased to 20 (was 10).
 # F-4 FIX: well_consistency_weight lowered to 0.2 (was 0.5).
 # v6:  LoRA gradient flow fix (removed no_grad from backbone calls).
-#       focal_gamma=0 (plain weighted BCE — focal loss too aggressive on 80 samples).
-#       col_weight=2.0 (upweights column head which lagged row in v5 diagnostics).
-#       lora_rank=4 (was 8 — reduced to limit overfitting on 80 samples).
-#       temporal_layers=1 (was 2 — reduced trainable params).
+#       focal_gamma=0, col_weight=2.0, lora_rank=4, temporal_layers=1.
+# v7:  val_threshold 0.3→0.4 (diagnostic showed 0.3 masked 60% exact match).
+#       epochs 50→80 (model still improving at epoch 50, no early stop triggered).
+#       resume from v6 best.pt checkpoint (epoch 28, val_loss=0.4294) so v7
+#       continues fine-tuning rather than restarting from scratch.
 #
 # Usage:
 #   bash run_training.sh                      # use defaults
@@ -39,7 +40,7 @@ if [ -z "${DEVICE:-}" ]; then
 fi
 
 # ── Training hyper-params ──────────────────────────────────────────────────
-EPOCHS="${EPOCHS:-50}"
+EPOCHS="${EPOCHS:-80}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
 NUM_FRAMES="${NUM_FRAMES:-4}"
 VAL_SPLIT="${VAL_SPLIT:-0.2}"
@@ -50,9 +51,10 @@ FOCAL_GAMMA="${FOCAL_GAMMA:-0.0}"              # v6: plain weighted BCE (was 2.0
 COL_WEIGHT="${COL_WEIGHT:-2.0}"                # v6: upweight column head
 LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
+RESUME="${RESUME:-${OUTPUT_DIR}/best.pt}"      # v7: resume from v6 checkpoint
 
 # ── Launch ─────────────────────────────────────────────────────────────────
-echo "[run_training.sh] Starting training v6"
+echo "[run_training.sh] Starting training v7"
 echo "  DATA_DIR       : ${DATA_DIR}"
 echo "  LABELS         : ${LABELS}"
 echo "  OUTPUT         : ${OUTPUT_DIR}"
@@ -78,4 +80,5 @@ echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
   --col_weight              "${COL_WEIGHT}" \
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
+  --resume                  "${RESUME}" \
   2>&1 | tee "${REPO_ROOT}/training.log"

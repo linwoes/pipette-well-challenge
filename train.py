@@ -481,47 +481,46 @@ class Trainer:
                 all_row_targets.append(row_labels.cpu().numpy())
                 all_col_targets.append(col_labels.cpu().numpy())
 
-        # Compute metrics
+        # Compute metrics.
+        # v6 post-mortem: threshold=0.3 showed 0% exact match throughout 50 epochs,
+        # but diagnostic sweep revealed threshold=0.4 gives 60% on the same checkpoint.
+        # The model was learning correctly — the evaluation threshold was wrong.
+        # v7 fix: use 0.4. This matches the model's learned output scale (active
+        # row/col sigmoids cluster around 0.5–0.9; threshold=0.3 admitted too many
+        # false positives while threshold=0.4 correctly excludes inactive rows/cols).
         row_preds_all = np.vstack(all_row_preds)
         col_preds_all = np.vstack(all_col_preds)
         row_targets_all = np.vstack(all_row_targets)
         col_targets_all = np.vstack(all_col_targets)
 
-        # Threshold at 0.3 — lower threshold catches positive activations
-        # that the corrected focal loss pushes above 0.5, while avoiding the
-        # sigmoid(0)=0.5 boundary that caused threshold collapse in v3.
-        # Strict > avoids capturing the exact-0.3 boundary.
-        val_threshold = 0.3
+        val_threshold = 0.4
         row_preds_binary = (row_preds_all > val_threshold).astype(int)
         col_preds_binary = (col_preds_all > val_threshold).astype(int)
 
-        # Compute well predictions
         exact_match_scores = []
         jaccard_scores = []
+        cardinality_scores = []
+        row_letters = 'ABCDEFGH'
         for i in range(len(row_preds_binary)):
             row_pred_idx = np.where(row_preds_binary[i])[0]
             col_pred_idx = np.where(col_preds_binary[i])[0]
             row_target_idx = np.where(row_targets_all[i])[0]
             col_target_idx = np.where(col_targets_all[i])[0]
 
-            pred_wells = [{'well_row': chr(ord('A') + r), 'well_column': int(c + 1)}
-                         for r in row_pred_idx for c in col_pred_idx]
-            target_wells = [{'well_row': chr(ord('A') + r), 'well_column': int(c + 1)}
-                           for r in row_target_idx for c in col_target_idx]
+            pred_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
+                          for r in row_pred_idx for c in col_pred_idx]
+            target_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
+                            for r in row_target_idx for c in col_target_idx]
 
             exact_match_scores.append(exact_match(pred_wells, target_wells))
             jaccard_scores.append(jaccard_similarity(pred_wells, target_wells))
+            cardinality_scores.append(cardinality_accuracy(pred_wells, target_wells))
 
         metrics = {
-            'val_loss': total_loss / len(self.val_loader),
-            'exact_match': np.mean(exact_match_scores),
-            'jaccard': np.mean(jaccard_scores),
-            'cardinality_acc': np.mean([cardinality_accuracy(
-                [{'well_row': chr(ord('A') + r), 'well_column': int(c + 1)}
-                 for r in np.where(row_preds_binary[i])[0] for c in np.where(col_preds_binary[i])[0]],
-                [{'well_row': chr(ord('A') + r), 'well_column': int(c + 1)}
-                 for r in np.where(row_targets_all[i])[0] for c in np.where(col_targets_all[i])[0]]
-            ) for i in range(len(row_preds_binary))])
+            'val_loss':        total_loss / len(self.val_loader),
+            'exact_match':     np.mean(exact_match_scores),
+            'jaccard':         np.mean(jaccard_scores),
+            'cardinality_acc': np.mean(cardinality_scores),
         }
 
         return metrics['val_loss'], metrics
@@ -577,6 +576,8 @@ class Trainer:
             'exact_match':     float(metrics['exact_match']),
             'jaccard':         float(metrics['jaccard']),
             'cardinality_acc': float(metrics['cardinality_acc']),
+            # Model config — required to reconstruct the architecture for inference/diagnostics
+            'model_config': getattr(self, '_model_config', {}),
         }
 
         path = self.output_dir / 'best.pt'
@@ -665,6 +666,17 @@ def main():
     )
     model = model.to(device)
 
+    model_config = {
+        'num_rows': 8,
+        'num_columns': 12,
+        'shared_backbone': True,
+        'use_lora': True,
+        'lora_rank': args.lora_rank,
+        'temporal_layers': args.temporal_layers,
+        'use_dinov2': use_dinov2,
+        'img_size': args.img_size,
+    }
+
     # Create trainer
     trainer = Trainer(
         model=model,
@@ -681,6 +693,7 @@ def main():
         patience=args.patience,
         well_consistency_weight=args.well_consistency_weight,
     )
+    trainer._model_config = model_config
 
     # Resume from checkpoint if specified
     start_epoch = 0
