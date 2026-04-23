@@ -699,7 +699,7 @@ def main():
     start_epoch = 0
     if args.resume and os.path.exists(args.resume):
         logger.info(f"Resuming from checkpoint: {args.resume}")
-        ckpt = torch.load(args.resume, map_location=device, weights_only=True)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt['model_state_dict'])
         trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
