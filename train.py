@@ -597,8 +597,6 @@ def main():
     parser.add_argument('--img_size', type=int, default=224,
                         help='Input image size. Must be a multiple of 14 for DINOv2 (e.g. 224, 336, 448, 518)')
     parser.add_argument('--device', type=str, default=None, help='Device (cuda/cpu)')
-    parser.add_argument('--backbone', type=str, default='dinov2', choices=['dinov2', 'resnet18'],
-                        help='Backbone architecture (dinov2 or resnet18 for CPU training)')
     parser.add_argument('--focal_alpha', type=float, default=0.75, help='Focal loss alpha — weight for positive class (default 0.75; was 0.25)')
     parser.add_argument('--focal_gamma', type=float, default=0.0, help='Focal loss gamma — focusing parameter (default 0.0 = plain weighted BCE; use 2.0 for focal loss)')
     parser.add_argument('--col_weight', type=float, default=2.0,
@@ -651,8 +649,7 @@ def main():
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, pin_memory=False)
 
     # Build model
-    logger.info(f"Building model with {args.backbone} backbone...")
-    use_dinov2 = (args.backbone == 'dinov2')
+    logger.info("Building model...")
     model = DualViewFusion(
         num_rows=8,
         num_columns=12,
@@ -660,7 +657,6 @@ def main():
         use_lora=True,
         lora_rank=args.lora_rank,
         temporal_layers=args.temporal_layers,
-        use_dinov2=use_dinov2,
         img_size=args.img_size,
     )
     model = model.to(device)
@@ -672,7 +668,6 @@ def main():
         'use_lora': True,
         'lora_rank': args.lora_rank,
         'temporal_layers': args.temporal_layers,
-        'use_dinov2': use_dinov2,
         'img_size': args.img_size,
     }
 

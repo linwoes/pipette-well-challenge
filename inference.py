@@ -87,11 +87,6 @@ class PipetteWellDetector:
 
         The checkpoint was saved by train.py which uses DualViewFusion directly,
         so we create the same architecture and load state_dict into it.
-
-        Backbone type (DINOv2 vs ResNet18) is auto-detected from checkpoint keys:
-        - If checkpoint contains 'backbone_fpv.model.conv1.weight', it was trained
-          with LegacyResNet18Backbone (use_dinov2=False).
-        - Otherwise, DINOv2 backbone is assumed (use_dinov2=True).
         """
         checkpoint_path = model_checkpoint or 'checkpoints/best.pt'
 
@@ -102,13 +97,7 @@ class PipetteWellDetector:
             try:
                 state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
                 cfg = state.get('model_config', {})
-                ckpt_keys = set(state.get('model_state_dict', state).keys())
-                if any('conv1.weight' in k for k in ckpt_keys):
-                    cfg.setdefault('use_dinov2', False)
-                    logger.info("Checkpoint uses LegacyResNet18Backbone (detected conv1.weight).")
-                else:
-                    cfg.setdefault('use_dinov2', True)
-                    logger.info("Checkpoint uses DINOv2 backbone.")
+                logger.info("Checkpoint uses DINOv2 backbone.")
             except Exception as e:
                 logger.warning(f"Could not pre-inspect checkpoint: {e}. Using defaults.")
 
@@ -119,7 +108,6 @@ class PipetteWellDetector:
             use_lora=cfg.get('use_lora', True),
             lora_rank=cfg.get('lora_rank', 4),
             temporal_layers=cfg.get('temporal_layers', 1),
-            use_dinov2=cfg.get('use_dinov2', True),
             img_size=cfg.get('img_size', self.img_size),
         )
         model = model.to(self.device)

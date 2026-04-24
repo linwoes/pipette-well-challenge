@@ -133,7 +133,6 @@ class DualViewFusion(nn.Module):
         dropout: float = 0.3,
         max_frames: int = 8,
         img_size: int = 224,
-        use_dinov2: bool = True,
     ):
         """
         Initialize DualViewFusion model.
@@ -151,8 +150,7 @@ class DualViewFusion(nn.Module):
             output_dim: Output dimension before heads (default 256)
             dropout: Dropout rate (default 0.3)
             max_frames: Maximum frame sequence length (default 8)
-            img_size: Input image size (default 224). For DINOv2, must be multiple of 14.
-            use_dinov2: Use DINOv2 backbone if True, ResNet18 if False (default True)
+            img_size: Input image size (default 224). Must be a multiple of 14 for DINOv2.
         """
         super().__init__()
 
@@ -160,64 +158,34 @@ class DualViewFusion(nn.Module):
         self.num_columns = num_columns
         self.shared_backbone = shared_backbone
         self.temporal_dim = temporal_dim
-        self.use_dinov2 = use_dinov2
 
-        # Validate DINOv2 resolution alignment
-        if use_dinov2:
-            from .backbone import DINOV2_PATCH_SIZE
-            from src.preprocessing.video_loader import snap_to_dinov2_resolution
-            snapped = snap_to_dinov2_resolution(img_size)
-            if snapped != img_size:
-                _logger.warning(
-                    f"img_size={img_size} adjusted to {snapped} for DINOv2 patch alignment."
-                )
-            self.img_size = snapped
-        else:
-            self.img_size = img_size
+        from src.preprocessing.video_loader import snap_to_dinov2_resolution
+        snapped = snap_to_dinov2_resolution(img_size)
+        if snapped != img_size:
+            _logger.warning(
+                f"img_size={img_size} adjusted to {snapped} for DINOv2 patch alignment."
+            )
+        self.img_size = snapped
 
-        # Initialize backbones
-        if use_dinov2:
-            self.backbone_fpv = DINOv2Backbone(
+        self.backbone_fpv = DINOv2Backbone(
+            use_lora=use_lora,
+            lora_rank=lora_rank,
+            freeze_base=True,
+            img_size=self.img_size,
+        )
+        if not shared_backbone:
+            self.backbone_topview = DINOv2Backbone(
                 use_lora=use_lora,
                 lora_rank=lora_rank,
                 freeze_base=True,
                 img_size=self.img_size,
             )
-            if not shared_backbone:
-                self.backbone_topview = DINOv2Backbone(
-                    use_lora=use_lora,
-                    lora_rank=lora_rank,
-                    freeze_base=True,
-                    img_size=self.img_size,
-                )
-            else:
-                self.backbone_topview = None
         else:
-            # Use ResNet18 fallback for CPU training
-            from .backbone import LegacyResNet18Backbone
-            self.backbone_fpv = LegacyResNet18Backbone(pretrained=True, freeze_early=True)
-            # ResNet18 outputs 512 dims, need to adjust temporal_dim
-            self.temporal_dim = 512
-            temporal_dim = 512
-            # ResNet18 with 512 dims needs nhead divisible by 8
-            temporal_nhead = 8  # 512 / 8 = 64
+            self.backbone_topview = None
 
-            if not shared_backbone:
-                self.backbone_topview = LegacyResNet18Backbone(pretrained=True, freeze_early=True)
-            else:
-                self.backbone_topview = None
-
-        # L-2: Dimension guard — verify backbone output dim matches temporal_dim
-        # before constructing the Temporal Attention modules.
-        # A mismatch (e.g. loading a DINOv2 checkpoint into ResNet18 or vice-versa)
-        # causes a silent shape error that is hard to debug at inference time.
-        if use_dinov2:
-            backbone_output_dim = 768  # DINOv2-ViT-B/14 CLS token
-        else:
-            backbone_output_dim = 512  # ResNet-18 global avg pool
-        assert backbone_output_dim == temporal_dim, (
-            f"Backbone output dim ({backbone_output_dim}) != temporal_dim ({temporal_dim}). "
-            f"Use temporal_dim={backbone_output_dim} when use_dinov2={use_dinov2}."
+        assert 768 == temporal_dim, (
+            f"DINOv2-ViT-B/14 outputs 768 dims but temporal_dim={temporal_dim}. "
+            "Pass temporal_dim=768."
         )
 
         # Temporal attention for each view

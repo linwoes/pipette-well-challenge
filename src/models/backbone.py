@@ -1,9 +1,8 @@
 """
-Backbone Module: DINOv2-ViT-B/14 with LoRA adapters + ResNet-18 fallback
+Backbone Module: DINOv2-ViT-B/14 with LoRA adapters
 
 Implements:
   - DINOv2Backbone: DINOv2-ViT-B/14 with optional LoRA fine-tuning
-  - LegacyResNet18Backbone: Fallback ResNet-18 backbone
   - LoRA adapter injection into attention layers
 
 ARCHITECTURE FIX (April 2026):
@@ -156,22 +155,18 @@ class DINOv2Backbone(nn.Module):
         self.model = self._load_dinov2(img_size)
 
         if self.model is None:
-            warnings.warn(
-                "Failed to load DINOv2 via torch.hub. Using LegacyResNet18Backbone fallback. "
-                "This may impact model performance."
+            raise RuntimeError(
+                "Failed to load DINOv2 via torch.hub and timm. "
+                "Ensure network access or a local cache is available."
             )
-            self.use_fallback = True
-            self.model = None  # Will be handled by forward()
-        else:
-            self.use_fallback = False
 
-            # Freeze all base model parameters
-            if freeze_base:
-                self.freeze_base()
+        # Freeze all base model parameters
+        if freeze_base:
+            self.freeze_base()
 
-            # Inject LoRA adapters if enabled
-            if use_lora:
-                self._inject_lora_adapters()
+        # Inject LoRA adapters if enabled
+        if use_lora:
+            self._inject_lora_adapters()
 
     def _load_dinov2(self, img_size: int = 224) -> Optional[nn.Module]:
         """
@@ -206,7 +201,7 @@ class DINOv2Backbone(nn.Module):
             _logger.info(f"Loaded DINOv2 via timm (img_size={img_size})")
             return model
         except Exception as e:
-            warnings.warn(f"timm fallback failed: {e}. Will use ResNet18 fallback.")
+            warnings.warn(f"timm fallback failed: {e}.")
             return None
 
     def _inject_lora_adapters(self):
@@ -324,28 +319,7 @@ class DINOv2Backbone(nn.Module):
         Returns:
             features: (B, 768) CLS token features
         """
-        # Validate DINOv2 input resolution alignment (must be multiples of 14)
-        if not self.use_fallback:
-            validate_dinov2_input(x)
-
-        if self.use_fallback:
-            # Use ResNet18 fallback
-            from torchvision.models import resnet18
-            if not hasattr(self, '_fallback_resnet'):
-                self._fallback_resnet = resnet18(pretrained=True)
-                # Remove classification head
-                self._fallback_resnet = nn.Sequential(
-                    *list(self._fallback_resnet.children())[:-1]
-                )
-                self._fallback_resnet.eval()
-                for param in self._fallback_resnet.parameters():
-                    param.requires_grad = False
-                self._fallback_resnet = self._fallback_resnet.to(x.device)
-
-            # Global average pooling output
-            with torch.no_grad():
-                features = self._fallback_resnet(x)
-            return features.view(features.size(0), -1)
+        validate_dinov2_input(x)
 
         # Standard DINOv2 forward: extract CLS token (index 0)
         # DINOv2 returns shape (B, num_patches + 1, 768) where index 0 is CLS
@@ -367,102 +341,3 @@ class DINOv2Backbone(nn.Module):
         return cls_token
 
 
-class LegacyResNet18Backbone(nn.Module):
-    """
-    ResNet-18 backbone for spatial feature extraction (legacy/fallback).
-
-    Takes (B, 3, 224, 224) input and outputs (B, 512) features.
-    Used as fallback when DINOv2 fails to load.
-    """
-
-    def __init__(self, pretrained: bool = True, freeze_early: bool = True):
-        """
-        Initialize ResNet-18 backbone.
-
-        Args:
-            pretrained: Load ImageNet pretrained weights (default True)
-            freeze_early: Freeze layer1, layer2 for training stability (default True)
-        """
-        super().__init__()
-
-        from torchvision.models import resnet18, ResNet18_Weights
-
-        # Load ResNet-18 — gracefully fall back to random weights if download blocked
-        if pretrained:
-            try:
-                self.model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
-                _logger.info("Loaded ImageNet pretrained ResNet-18 weights")
-            except Exception as e:
-                _logger.warning(
-                    f"Could not download pretrained weights ({e}). "
-                    "Training from random initialisation."
-                )
-                self.model = resnet18(weights=None)
-        else:
-            self.model = resnet18(weights=None)
-
-        # Remove classification head (replace with identity)
-        self.model.fc = nn.Identity()
-
-        # Optionally freeze early layers
-        if freeze_early:
-            self._freeze_layers(max_layer=2)
-
-    def _freeze_layers(self, max_layer: int = 2):
-        """
-        Freeze layers up to and including max_layer.
-
-        Args:
-            max_layer: Maximum layer number to freeze (1, 2, 3, or 4)
-        """
-        # Freeze conv1 and bn1
-        for param in self.model.conv1.parameters():
-            param.requires_grad = False
-        for param in self.model.bn1.parameters():
-            param.requires_grad = False
-
-        # Freeze specified layers
-        for layer_num in range(1, max_layer + 1):
-            layer = getattr(self.model, f'layer{layer_num}')
-            for param in layer.parameters():
-                param.requires_grad = False
-
-    def unfreeze_layers(self, start_layer: int = 2):
-        """
-        Unfreeze layers from start_layer onwards for fine-tuning.
-
-        Args:
-            start_layer: Layer number to start unfreezing (1, 2, 3, or 4)
-        """
-        for layer_num in range(start_layer, 5):
-            layer = getattr(self.model, f'layer{layer_num}')
-            for param in layer.parameters():
-                param.requires_grad = True
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass through ResNet-18.
-
-        Args:
-            x: (B, 3, 224, 224) input tensor
-
-        Returns:
-            features: (B, 512) feature vector
-        """
-        # Pass through conv1, bn1, relu, maxpool
-        x = self.model.conv1(x)
-        x = self.model.bn1(x)
-        x = self.model.relu(x)
-        x = self.model.maxpool(x)
-
-        # Pass through residual layers
-        x = self.model.layer1(x)
-        x = self.model.layer2(x)
-        x = self.model.layer3(x)
-        x = self.model.layer4(x)
-
-        # Global average pooling
-        x = self.model.avgpool(x)
-        x = x.view(x.size(0), -1)
-
-        return x
