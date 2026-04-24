@@ -31,7 +31,7 @@ import torch
 from src.models.fusion import DualViewFusion
 from src.preprocessing.video_loader import load_video, align_clips, preprocess_frame
 from src.postprocessing.output_formatter import (
-    logits_to_wells, logits_to_wells_adaptive,
+    logits_to_wells, logits_to_wells_typed,
     validate_output, format_json_output,
 )
 
@@ -54,31 +54,28 @@ class PipetteWellDetector:
     def __init__(
         self,
         model_checkpoint: Optional[str] = None,
-        threshold: float = 0.3,
+        threshold: float = 0.4,
         device: Optional[str] = None,
         img_size: int = 448,
-        use_adaptive: bool = True,
     ):
         """
         Initialize the detector.
 
         Args:
             model_checkpoint: Path to model checkpoint (.pt file)
-            threshold: Confidence threshold for fixed-threshold predictions
+            threshold: Fallback confidence threshold (default 0.4; used when
+                       type_logits are unavailable)
             device: Device to run on ('cuda' or 'cpu')
             img_size: Input image size (must be multiple of 14 for DINOv2)
-            use_adaptive: Use adaptive post-processing (recommended)
         """
         self.threshold = threshold
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.img_size = img_size
-        self.use_adaptive = use_adaptive
 
         logger.info("Initializing PipetteWellDetector")
         logger.info(f"Device: {self.device}")
-        logger.info(f"Threshold: {threshold}")
+        logger.info(f"Threshold (fallback): {threshold}")
         logger.info(f"Image size: {img_size}")
-        logger.info(f"Adaptive post-processing: {use_adaptive}")
 
         # Initialize model
         self.model = self._load_model(model_checkpoint)
@@ -98,52 +95,47 @@ class PipetteWellDetector:
         """
         checkpoint_path = model_checkpoint or 'checkpoints/best.pt'
 
-        # Auto-detect backbone type from checkpoint before building model
-        use_dinov2 = True  # default
+        # Load checkpoint and read model_config to reconstruct the exact architecture.
+        # weights_only=False is required because the checkpoint contains model_config dict.
+        cfg = {}
         if os.path.exists(checkpoint_path):
             try:
-                state = torch.load(
-                    checkpoint_path,
-                    map_location='cpu',
-                    weights_only=True,
-                )
+                state = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                cfg = state.get('model_config', {})
                 ckpt_keys = set(state.get('model_state_dict', state).keys())
                 if any('conv1.weight' in k for k in ckpt_keys):
-                    use_dinov2 = False
-                    logger.info(
-                        "Checkpoint uses LegacyResNet18Backbone (detected conv1.weight). "
-                        "Initializing with use_dinov2=False."
-                    )
+                    cfg.setdefault('use_dinov2', False)
+                    logger.info("Checkpoint uses LegacyResNet18Backbone (detected conv1.weight).")
                 else:
-                    logger.info("Checkpoint uses DINOv2 backbone. Initializing with use_dinov2=True.")
+                    cfg.setdefault('use_dinov2', True)
+                    logger.info("Checkpoint uses DINOv2 backbone.")
             except Exception as e:
-                logger.warning(f"Could not pre-inspect checkpoint keys: {e}. Defaulting to use_dinov2=True.")
+                logger.warning(f"Could not pre-inspect checkpoint: {e}. Using defaults.")
 
-        # Create model matching the detected architecture
         model = DualViewFusion(
-            num_rows=8,
-            num_columns=12,
-            shared_backbone=True,
-            use_lora=True,
-            lora_rank=8,
-            use_dinov2=use_dinov2,
-            img_size=self.img_size,
+            num_rows=cfg.get('num_rows', 8),
+            num_columns=cfg.get('num_columns', 12),
+            shared_backbone=cfg.get('shared_backbone', True),
+            use_lora=cfg.get('use_lora', True),
+            lora_rank=cfg.get('lora_rank', 4),
+            temporal_layers=cfg.get('temporal_layers', 1),
+            use_dinov2=cfg.get('use_dinov2', True),
+            img_size=cfg.get('img_size', self.img_size),
         )
         model = model.to(self.device)
 
-        # Load checkpoint weights
         if os.path.exists(checkpoint_path):
             try:
-                state = torch.load(
-                    checkpoint_path,
-                    map_location=self.device,
-                    weights_only=True,
-                )
+                state = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
                 model_state = state.get('model_state_dict', state)
                 model.load_state_dict(model_state)
                 epoch = state.get('epoch', '?')
                 val_loss = state.get('val_loss', '?')
-                logger.info(f"Loaded checkpoint from {checkpoint_path} (epoch {epoch}, val_loss={val_loss})")
+                jaccard = state.get('jaccard', '?')
+                logger.info(
+                    f"Loaded checkpoint from {checkpoint_path} "
+                    f"(epoch {epoch}, val_loss={val_loss}, jaccard={jaccard})"
+                )
             except Exception as e:
                 logger.warning(f"Failed to load checkpoint from {checkpoint_path}: {e}")
                 logger.warning("Running with uninitialized weights (inference will be random)")
@@ -216,7 +208,7 @@ class PipetteWellDetector:
         self,
         fpv_tensor: torch.Tensor,
         topview_tensor: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor, float]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, float]:
         """
         Run model inference.
 
@@ -225,8 +217,9 @@ class PipetteWellDetector:
             topview_tensor: (1, N, 3, H, W) preprocessed top-view frames
 
         Returns:
-            row_logits: (1, 8) raw row predictions
-            col_logits: (1, 12) raw column predictions
+            row_logits:  (1, 8)  raw row predictions
+            col_logits:  (1, 12) raw column predictions
+            type_logits: (1, 3)  clip-type predictions (single/row/col)
             elapsed: Inference time in seconds
         """
         logger.info("Running inference...")
@@ -234,7 +227,7 @@ class PipetteWellDetector:
         start_time = time.time()
 
         with torch.no_grad():
-            row_logits, col_logits = self.model(fpv_tensor, topview_tensor)
+            row_logits, col_logits, type_logits = self.model(fpv_tensor, topview_tensor)
 
         elapsed = time.time() - start_time
 
@@ -244,22 +237,28 @@ class PipetteWellDetector:
         logger.info(f"Inference completed in {elapsed:.3f}s")
         logger.info(f"Row logits shape: {row_logits.shape}, Col logits shape: {col_logits.shape}")
 
-        return row_logits, col_logits, elapsed
+        return row_logits, col_logits, type_logits, elapsed
 
     def postprocess_predictions(
         self,
         row_logits: torch.Tensor,
         col_logits: torch.Tensor,
+        type_logits: torch.Tensor,
         fpv_path: str,
         topview_path: str,
         inference_time: float,
     ) -> Dict:
         """
-        Convert logits to well predictions with uncertainty handling.
+        Convert logits to well predictions.
+
+        Primary decoder: logits_to_wells_typed — uses the clip-type head to
+        select an argmax strategy (single/full-row/full-col) with no threshold.
+        Fallback: logits_to_wells(threshold=0.4) when type_logits unavailable.
 
         Args:
-            row_logits: (1, 8) tensor
-            col_logits: (1, 12) tensor
+            row_logits:  (1, 8)  tensor
+            col_logits:  (1, 12) tensor
+            type_logits: (1, 3)  clip-type logits
             fpv_path: FPV video path (used as clip_id)
             topview_path: Topview video path (used as clip_id)
             inference_time: Inference time in seconds
@@ -269,31 +268,23 @@ class PipetteWellDetector:
         """
         logger.info("Post-processing predictions...")
 
-        # Convert to numpy
-        row_arr = row_logits.squeeze(0).cpu().numpy()
-        col_arr = col_logits.squeeze(0).cpu().numpy()
+        row_arr  = row_logits.squeeze(0).cpu().numpy()
+        col_arr  = col_logits.squeeze(0).cpu().numpy()
+        type_arr = type_logits.squeeze(0).cpu().numpy()
 
-        # Apply sigmoid for probability reporting
         row_probs = 1.0 / (1.0 + np.exp(-np.clip(row_arr, -500, 500)))
         col_probs = 1.0 / (1.0 + np.exp(-np.clip(col_arr, -500, 500)))
 
-        logger.info(f"Row max prob: {row_probs.max():.4f}, Col max prob: {col_probs.max():.4f}")
+        clip_type_idx = int(np.argmax(type_arr))
+        clip_type_name = ['single', 'full_row', 'full_col'][clip_type_idx]
+        logger.info(
+            f"Row max prob: {row_probs.max():.4f}, Col max prob: {col_probs.max():.4f}, "
+            f"Clip type: {clip_type_name}"
+        )
 
-        # Generate well predictions
-        if self.use_adaptive:
-            wells = logits_to_wells_adaptive(row_arr, col_arr)
-            confident = True  # adaptive always produces predictions
-        elif row_probs.max() < self.threshold or col_probs.max() < self.threshold:
-            logger.warning(
-                f"Low confidence — Max row: {row_probs.max():.4f}, Max col: {col_probs.max():.4f}"
-            )
-            wells = []
-            confident = False
-        else:
-            wells = logits_to_wells(row_arr, col_arr, threshold=self.threshold)
-            confident = True
+        wells = logits_to_wells_typed(row_arr, col_arr, type_arr)
+        confident = True
 
-        # Format output matching challenge spec
         output = format_json_output(
             clip_id_fpv=fpv_path,
             clip_id_topview=topview_path,
@@ -302,9 +293,8 @@ class PipetteWellDetector:
             confident=confident,
         )
 
-        # Add extra metadata
-        output['metadata']['threshold'] = self.threshold
-        output['metadata']['adaptive'] = self.use_adaptive
+        output['metadata']['decoder'] = 'typed'
+        output['metadata']['clip_type'] = clip_type_name
         output['metadata']['max_row_prob'] = float(row_probs.max())
         output['metadata']['max_col_prob'] = float(col_probs.max())
 
@@ -334,11 +324,11 @@ class PipetteWellDetector:
             fpv_tensor, topview_tensor = self.load_and_preprocess_videos(fpv_path, topview_path)
 
             # Run inference
-            row_logits, col_logits, inference_time = self.infer(fpv_tensor, topview_tensor)
+            row_logits, col_logits, type_logits, inference_time = self.infer(fpv_tensor, topview_tensor)
 
             # Post-process
             output = self.postprocess_predictions(
-                row_logits, col_logits, fpv_path, topview_path, inference_time
+                row_logits, col_logits, type_logits, fpv_path, topview_path, inference_time
             )
 
             # Validate schema
@@ -419,11 +409,9 @@ def main():
     parser.add_argument('--topview', type=str, required=True, help='Path to top-view video file')
     parser.add_argument('--output', type=str, default=None, help='Output JSON file (default: stdout)')
     parser.add_argument('--model', type=str, default=None, help='Model checkpoint path')
-    parser.add_argument('--threshold', type=float, default=0.3, help='Confidence threshold (default 0.3)')
+    parser.add_argument('--threshold', type=float, default=0.4, help='Fallback confidence threshold (default 0.4)')
     parser.add_argument('--img_size', type=int, default=448,
                         help='Input image size (must be multiple of 14; default 448)')
-    parser.add_argument('--no-adaptive', action='store_true',
-                        help='Disable adaptive post-processing (use fixed threshold)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 
     args = parser.parse_args()
@@ -448,7 +436,6 @@ def main():
             model_checkpoint=args.model,
             threshold=args.threshold,
             img_size=args.img_size,
-            use_adaptive=not args.no_adaptive,
         )
 
         result = detector.infer_and_predict(args.fpv, args.topview)

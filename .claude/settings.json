@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//Users/bwaite/.pyenv/**)",
+      "Bash(python3 -c \"import torch; print\\(torch.__version__\\)\")",
+      "Bash(git commit -m ' *)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

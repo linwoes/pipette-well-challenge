@@ -113,11 +113,6 @@ Primary implementation uses **DINOv2-ViT-B/14 (frozen) + LoRA adapters + Tempora
 - Expected accuracy: 70–80% on real held-out validation (vs. ResNet's 50–60%)
 - **Status:** IMPLEMENTED in src/models/backbone.py and src/models/fusion.py
 
-**ResNet-18 (DEPRECATED 2015):**
-- Severe overfitting risk on N=100 samples with full fine-tuning (11M params)
-- Global average pooling destroys spatial information needed for well localization
-- **Status:** Sandbox fallback only (proxy blocks DINOv2 weight downloads); NOT production-recommended
-
 **VideoMAE (FUTURE ALTERNATIVE, NOT YET IMPLEMENTED):**
 - Kinetics-400 pre-training provides excellent temporal video understanding
 - Would be superior for temporal modeling if integrated

@@ -400,8 +400,8 @@ class Trainer:
         # Mixed precision scaler
         self.scaler = torch.cuda.amp.GradScaler() if device.startswith('cuda') else None
 
-        # Early stopping
-        self.best_val_loss = float('inf')
+        # Early stopping — tracked on Jaccard@t=0.4 (Fix 4)
+        self.best_jaccard = 0.0
         self.patience_counter = 0
 
     def _build_scheduler(self, total_epochs: int, warmup_epochs: int):
@@ -482,18 +482,14 @@ class Trainer:
                 all_row_targets.append(row_labels.cpu().numpy())
                 all_col_targets.append(col_labels.cpu().numpy())
 
-        # Compute metrics.
-        # v6 post-mortem: threshold=0.3 showed 0% exact match throughout 50 epochs,
-        # v8: type-conditioned evaluation — no threshold.
-        # The type head predicts single(0)/full-row(1)/full-col(2), which
-        # selects an argmax strategy: top-1×top-1 / top-1-row×all-cols /
-        # all-rows×top-1-col.  This eliminates the threshold sensitivity that
-        # caused exact_match to show 0% throughout v6 and v7 training even
-        # though the underlying probabilities were correct.
-        from src.postprocessing.output_formatter import logits_to_wells_typed
+        # Compute metrics using threshold=0.4 decoder (Fix 3).
+        # Diagnostic sweep showed threshold=0.4 gives 55% exact match on the
+        # epoch-33 checkpoint vs 0-5% with the typed argmax decoder (which
+        # collapses to top-1 col for full-column clips).  Using t=0.4 here
+        # ensures early stopping and checkpointing respond to real accuracy.
+        from src.postprocessing.output_formatter import logits_to_wells
         row_preds_all   = np.vstack(all_row_preds)
         col_preds_all   = np.vstack(all_col_preds)
-        type_preds_all  = np.vstack(all_type_preds)
         row_targets_all = np.vstack(all_row_targets)
         col_targets_all = np.vstack(all_col_targets)
 
@@ -502,9 +498,12 @@ class Trainer:
         cardinality_scores = []
         row_letters = 'ABCDEFGH'
         for i in range(len(row_preds_all)):
-            pred_wells = logits_to_wells_typed(
-                row_preds_all[i], col_preds_all[i], type_preds_all[i]
-            )
+            pred_wells = logits_to_wells(row_preds_all[i], col_preds_all[i], threshold=0.4)
+            if not pred_wells:
+                # Fallback to top-1×top-1 if threshold yields nothing
+                r = int(np.argmax(row_preds_all[i]))
+                c = int(np.argmax(col_preds_all[i]))
+                pred_wells = [{'well_row': row_letters[r], 'well_column': c + 1}]
             row_target_idx = np.where(row_targets_all[i])[0]
             col_target_idx = np.where(col_targets_all[i])[0]
             target_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
@@ -544,9 +543,9 @@ class Trainer:
             # LR scheduler step
             self.scheduler.step()
 
-            # Save best model
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
+            # Save best model — checkpoint on Jaccard@t=0.4 (Fix 4)
+            if metrics['jaccard'] > self.best_jaccard:
+                self.best_jaccard = metrics['jaccard']
                 self.patience_counter = 0
                 self._save_checkpoint(epoch, metrics)
                 logger.info(f"Saved best checkpoint at epoch {epoch + 1}")
@@ -704,9 +703,13 @@ def main():
         model.load_state_dict(ckpt['model_state_dict'])
         trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
-        trainer.best_val_loss = ckpt['val_loss']
+        trainer.best_jaccard = ckpt.get('jaccard', 0.0)
         start_epoch = ckpt['epoch'] + 1
-        logger.info(f"Resumed at epoch {start_epoch} | best val_loss={ckpt['val_loss']:.4f} | exact_match={ckpt['exact_match']*100:.1f}%")
+        logger.info(
+            f"Resumed at epoch {start_epoch} | "
+            f"best jaccard={ckpt.get('jaccard', 0.0):.4f} | "
+            f"val_loss={ckpt['val_loss']:.4f}"
+        )
 
     # Train (from start_epoch if resuming)
     trainer.train(start_epoch=start_epoch)

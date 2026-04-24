@@ -76,7 +76,7 @@ for clip in labels[:20]:   # approximate val set (last 20)
     top_t = preprocess(str(top_path))
 
     with torch.no_grad():
-        row_logits, col_logits = model(fpv_t, top_t)
+        row_logits, col_logits, type_logits = model(fpv_t, top_t)
 
     row_arr = row_logits.squeeze(0).numpy()
     col_arr = col_logits.squeeze(0).numpy()

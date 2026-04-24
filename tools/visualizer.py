@@ -13,6 +13,8 @@ Usage:
   python tools/visualizer.py annotate --result-id <ID> --text "note" --author qa_lead
   python tools/visualizer.py annotate --query --clip clip_001
   python tools/visualizer.py heatmap --input results.json --labels labels.json
+  python tools/visualizer.py embed   --instances 0 3 7 --checkpoint checkpoints/best.pt --labels data/pipette_well_dataset/labels.json
+  python tools/visualizer.py embed   --instances 10-15  --checkpoint checkpoints/best.pt
 """
 
 import argparse
@@ -251,34 +253,48 @@ def _build_gt_index(labels: List[Dict]) -> Dict[str, Dict]:
 # ═════════════════════════════════════════════════════════════════════════════
 
 class WellGridOverlay:
-    """Draws a 96-well plate grid overlay on a video frame."""
+    """Draws a 96-well plate grid overlay on a video frame.
+
+    plate_bounds — (left, top, right, bottom) as fractions of frame dimensions
+    specifying where the physical plate sits in the video.  Default (0.0, 0.0,
+    1.0, 1.0) fills the whole frame with a small fixed margin.  Pass tighter
+    fractions (e.g. (0.1, 0.1, 0.9, 0.9)) when the plate only occupies a
+    sub-region of the camera view.
+    """
 
     def __init__(
         self,
         frame_width: int,
         frame_height: int,
         well_radius: int = WELL_RADIUS_DEFAULT,
+        plate_bounds: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
     ):
         self.fw = frame_width
         self.fh = frame_height
         self.well_radius = well_radius
 
-        # Grid geometry — place the 8×12 grid in the centre-right of frame
-        # Leave margins for text overlay
-        margin_top = 60
-        margin_bottom = 30
-        margin_left = 30
-        margin_right = 30
+        # Convert fractional plate bounds → pixel region
+        bx0 = int(plate_bounds[0] * frame_width)
+        by0 = int(plate_bounds[1] * frame_height)
+        bx1 = int(plate_bounds[2] * frame_width)
+        by1 = int(plate_bounds[3] * frame_height)
 
-        usable_w = self.fw - margin_left - margin_right
-        usable_h = self.fh - margin_top - margin_bottom
+        # Add small inset so labels don't clip at the plate edge
+        pad_x = max(4, (bx1 - bx0) // 20)
+        pad_y = max(4, (by1 - by0) // 20)
+        bx0 += pad_x;  by0 += pad_y
+        bx1 -= pad_x;  by1 -= pad_y
 
-        # Well spacing
+        usable_w = bx1 - bx0
+        usable_h = by1 - by0
+
+        # Well spacing — divide usable area into (n+1) equal cells so wells
+        # sit at cell centres with half-cell margins at each edge.
         self.col_spacing = usable_w / (len(COLS) + 1)
         self.row_spacing = usable_h / (len(ROWS) + 1)
 
-        self.origin_x = margin_left + self.col_spacing
-        self.origin_y = margin_top + self.row_spacing
+        self.origin_x = bx0 + self.col_spacing
+        self.origin_y = by0 + self.row_spacing
 
     def well_centre(self, row: str, col: int) -> Tuple[int, int]:
         """Get pixel centre for a well given row letter and column number."""
@@ -506,6 +522,387 @@ def render_clip(
         f"{frame_idx} frames, Hamming={score}, IoU={jacc:.2f} → {output_path.name}"
     )
     return meta
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Embed command — live model inference visualization
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _sigmoid_np(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-x))
+
+
+def _load_model_for_embed(ckpt_path: Path):
+    """Load DualViewFusion from checkpoint, auto-detecting v8 architecture."""
+    import torch
+    from src.models.fusion import DualViewFusion
+
+    ckpt = torch.load(str(ckpt_path), weights_only=False, map_location='cpu')
+    cfg = ckpt.get('model_config', {})
+    state_dict = ckpt.get('model_state_dict', ckpt)
+    has_type_head = any('type_head' in k for k in state_dict.keys())
+
+    model = DualViewFusion(
+        num_rows=cfg.get('num_rows', 8),
+        num_columns=cfg.get('num_columns', 12),
+        shared_backbone=cfg.get('shared_backbone', True),
+        use_lora=cfg.get('use_lora', True),
+        lora_rank=cfg.get('lora_rank', 4),
+        temporal_layers=cfg.get('temporal_layers', 1),
+        use_dinov2=cfg.get('use_dinov2', True),
+        img_size=cfg.get('img_size', 448),
+    )
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    epoch = ckpt.get('epoch', '?')
+    val_loss = ckpt.get('val_loss', float('nan'))
+    logger.info(f"Checkpoint: epoch={epoch}, val_loss={val_loss:.4f}, type_head={has_type_head}")
+    return model, has_type_head, cfg
+
+
+def _run_embed_inference(
+    fpv_path: Path,
+    top_path: Path,
+    model,
+    has_type_head: bool,
+    img_size: int = 448,
+    n_frames: int = 4,
+) -> Dict:
+    """Run model inference once and return probs + predictions."""
+    import torch
+    from src.preprocessing.video_loader import load_video, preprocess_frame
+    from src.postprocessing.output_formatter import logits_to_wells_typed, logits_to_wells_adaptive
+
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+    def _prep(path: Path) -> 'torch.Tensor':
+        frames = load_video(str(path), max_frames=n_frames)
+        proc = np.array([preprocess_frame(f, size=(img_size, img_size)) for f in frames])
+        proc = (proc - mean) / std
+        t = torch.from_numpy(proc.transpose(0, 3, 1, 2)).float()
+        return t.unsqueeze(0)
+
+    with torch.no_grad():
+        out = model(_prep(fpv_path), _prep(top_path))
+
+    if has_type_head:
+        row_arr = out[0].squeeze(0).numpy()
+        col_arr = out[1].squeeze(0).numpy()
+        type_arr = out[2].squeeze(0).numpy()
+        exp_t = np.exp(type_arr - type_arr.max())
+        type_probs = exp_t / exp_t.sum()
+        pred_wells = logits_to_wells_typed(row_arr, col_arr, type_arr)
+    else:
+        row_arr = out[0].squeeze(0).numpy()
+        col_arr = out[1].squeeze(0).numpy()
+        type_arr = None
+        type_probs = np.array([1.0, 0.0, 0.0])
+        pred_wells = logits_to_wells_adaptive(row_arr, col_arr)
+
+    return {
+        'row_probs': _sigmoid_np(row_arr),
+        'col_probs': _sigmoid_np(col_arr),
+        'type_probs': type_probs,
+        'pred_wells': pred_wells,
+    }
+
+
+def _wells_to_short_str(wells: List[Dict]) -> str:
+    parts = [f"{w['well_row']}{w['well_column']}" for w in wells[:14]]
+    s = ','.join(parts)
+    return s + f'...(+{len(wells)-14})' if len(wells) > 14 else s or '(none)'
+
+
+def _draw_metrics_panel(
+    width: int,
+    row_probs: np.ndarray,
+    col_probs: np.ndarray,
+    type_probs: np.ndarray,
+    pred_wells: List[Dict],
+    gt_wells: Optional[List[Dict]] = None,
+    panel_h: int = 155,
+) -> np.ndarray:
+    """
+    Metrics panel appended below the video frame.
+
+    Layout:
+      y  5–55  : Row prob bars (left) | Col prob bars (right)
+      y 62–100 : Type classification boxes (SINGLE / ROW / COL)
+      y 105–155: Prediction text + GT comparison
+    """
+    panel = np.full((panel_h, width, 3), 30, dtype=np.uint8)
+
+    BAR_GAP = 2
+    LABEL_W = 18
+    BAR_BG  = (70, 70, 70)
+    BAR_DIM = (80, 160, 80)
+    BAR_HOT = (50, 230, 50)
+    TEXT_CLR = (220, 220, 220)
+    TYPE_NAMES = ['SINGLE', 'ROW', 'COL']
+    TYPE_CLR   = [(60, 180, 180), (220, 180, 80), (80, 100, 220)]
+
+    by_top, by_bot = 6, 52
+
+    # ── Left half: row probability bars (A-H) ────────────────────────────────
+    half = width // 2
+    n_r = len(row_probs)
+    avail_r = half - 10 - LABEL_W - n_r * BAR_GAP
+    bar_rw = max(4, avail_r // n_r)
+    cv2.putText(panel, "ROW PROBS", (5, 14), FONT, 0.35, TEXT_CLR, 1, cv2.LINE_AA)
+    for i, prob in enumerate(row_probs):
+        bx = 5 + LABEL_W + i * (bar_rw + BAR_GAP)
+        bar_h = int(prob * (by_bot - by_top - 2))
+        cv2.rectangle(panel, (bx, by_top), (bx + bar_rw, by_bot), BAR_BG, -1)
+        cv2.rectangle(panel, (bx, by_bot - bar_h), (bx + bar_rw, by_bot),
+                      BAR_HOT if prob >= 0.5 else BAR_DIM, -1)
+        cv2.putText(panel, 'ABCDEFGH'[i], (bx + 1, by_bot + 10),
+                    FONT, 0.28, TEXT_CLR, 1, cv2.LINE_AA)
+        cv2.putText(panel, f"{prob:.0%}", (bx - 1, by_top - 1),
+                    FONT, 0.22, TEXT_CLR, 1, cv2.LINE_AA)
+
+    # ── Right half: col probability bars (1-12) ───────────────────────────────
+    n_c = len(col_probs)
+    avail_c = half - 20 - LABEL_W - n_c * BAR_GAP
+    bar_cw = max(4, avail_c // n_c)
+    cx0 = half + 5
+    cv2.putText(panel, "COL PROBS", (cx0, 14), FONT, 0.35, TEXT_CLR, 1, cv2.LINE_AA)
+    for i, prob in enumerate(col_probs):
+        bx = cx0 + LABEL_W + i * (bar_cw + BAR_GAP)
+        bar_h = int(prob * (by_bot - by_top - 2))
+        cv2.rectangle(panel, (bx, by_top), (bx + bar_cw, by_bot), BAR_BG, -1)
+        cv2.rectangle(panel, (bx, by_bot - bar_h), (bx + bar_cw, by_bot),
+                      BAR_HOT if prob >= 0.5 else BAR_DIM, -1)
+        cv2.putText(panel, str(i + 1), (bx + 1, by_bot + 10),
+                    FONT, 0.25, TEXT_CLR, 1, cv2.LINE_AA)
+        cv2.putText(panel, f"{prob:.0%}", (bx - 1, by_top - 1),
+                    FONT, 0.20, TEXT_CLR, 1, cv2.LINE_AA)
+
+    cv2.line(panel, (0, 60), (width, 60), (60, 60, 60), 1)
+
+    # ── Type classification boxes ─────────────────────────────────────────────
+    box_w, box_h = 110, 30
+    active_idx = int(np.argmax(type_probs))
+    ty0 = 64
+    for ti, (tname, tprob, tclr) in enumerate(zip(TYPE_NAMES, type_probs, TYPE_CLR)):
+        bx = 5 + ti * (box_w + 8)
+        active = (ti == active_idx)
+        cv2.rectangle(panel, (bx, ty0), (bx + box_w, ty0 + box_h),
+                      tclr if active else (70, 70, 70), 2 if active else 1)
+        marker = '>' if active else ' '
+        cv2.putText(panel, f"{marker}{tname}  {tprob*100:.1f}%",
+                    (bx + 5, ty0 + 20), FONT, 0.38,
+                    tclr if active else (110, 110, 110), 1, cv2.LINE_AA)
+
+    cv2.line(panel, (0, 100), (width, 100), (60, 60, 60), 1)
+
+    # ── Prediction / GT text ──────────────────────────────────────────────────
+    pred_str = _wells_to_short_str(pred_wells)
+    cv2.putText(panel, f"PRED ({len(pred_wells)}): {pred_str}",
+                (5, 116), FONT, 0.38, (100, 230, 100), 1, cv2.LINE_AA)
+
+    if gt_wells is not None:
+        gt_str = _wells_to_short_str(gt_wells)
+        em = exact_match(pred_wells, gt_wells)
+        jc = jaccard_similarity(pred_wells, gt_wells)
+        em_clr = (80, 230, 80) if em else (80, 80, 230)
+        cv2.putText(panel, f"GT   ({len(gt_wells)}): {gt_str}",
+                    (5, 133), FONT, 0.38, (180, 180, 180), 1, cv2.LINE_AA)
+        verdict = 'EXACT MATCH' if em else f'WRONG  IoU={jc:.3f}'
+        cv2.putText(panel, verdict, (5, 150), FONT, 0.40, em_clr, 1, cv2.LINE_AA)
+
+    return panel
+
+
+def render_embed_clip(
+    fpv_path: Path,
+    top_path: Path,
+    inference: Dict,
+    gt_wells: Optional[List[Dict]],
+    clip_id: str,
+    instance_idx: int,
+    output_path: Path,
+    well_radius: int = WELL_RADIUS_DEFAULT,
+    panel_h: int = 155,
+    plate_bounds: Tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0),
+) -> Path:
+    """
+    Render a time-aligned side-by-side video with model metrics panel.
+
+    Output layout per frame:
+      [50px header: clip / type / frame counter]
+      [fh: FPV full-res | Topview full-res + well grid]
+      [panel_h: row/col bars + type boxes + predictions]
+
+    plate_bounds — (left, top, right, bottom) as fractions of the topview frame
+    width/height, specifying where the physical well plate sits.
+    """
+    cap_f = cv2.VideoCapture(str(fpv_path))
+    cap_t = cv2.VideoCapture(str(top_path))
+    if not cap_f.isOpened():
+        raise IOError(f"Cannot open FPV: {fpv_path}")
+    if not cap_t.isOpened():
+        raise IOError(f"Cannot open Topview: {top_path}")
+
+    fps = cap_t.get(cv2.CAP_PROP_FPS) or 30.0
+    fw  = int(cap_t.get(cv2.CAP_PROP_FRAME_WIDTH))
+    fh  = int(cap_t.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    total = min(int(cap_t.get(cv2.CAP_PROP_FRAME_COUNT)),
+                int(cap_f.get(cv2.CAP_PROP_FRAME_COUNT)))
+
+    HEADER_H = 50
+    out_w = fw * 2
+    out_h = HEADER_H + fh + panel_h
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = cv2.VideoWriter(
+        str(output_path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (out_w, out_h)
+    )
+
+    pred_set = _well_set(inference['pred_wells'])
+    gt_set   = _well_set(gt_wells) if gt_wells else set()
+    tp = pred_set & gt_set
+    fp = pred_set - gt_set
+    fn = gt_set  - pred_set
+
+    grid  = WellGridOverlay(fw, fh, well_radius, plate_bounds)
+    panel = _draw_metrics_panel(
+        out_w, inference['row_probs'], inference['col_probs'],
+        inference['type_probs'], inference['pred_wells'], gt_wells, panel_h,
+    )
+
+    TYPE_NAMES  = ['SINGLE', 'ROW', 'COL']
+    active_type = int(np.argmax(inference['type_probs']))
+    type_conf   = inference['type_probs'][active_type]
+    type_label  = f"{TYPE_NAMES[active_type]} {type_conf*100:.0f}%"
+
+    em = exact_match(inference['pred_wells'], gt_wells) if gt_wells else None
+    jc = jaccard_similarity(inference['pred_wells'], gt_wells) if gt_wells else None
+    verdict = ('EXACT' if em else f'IoU={jc:.3f}') if em is not None else ''
+
+    frame_idx = 0
+    while frame_idx < total:
+        ret_f, f_fpv = cap_f.read()
+        ret_t, f_top = cap_t.read()
+        if not ret_f or not ret_t:
+            break
+
+        f_fpv = cv2.resize(f_fpv, (fw, fh))
+        f_top = cv2.resize(f_top, (fw, fh))
+
+        f_top = grid.draw_grid(f_top, alpha=0.35)
+        f_top = grid.highlight_wells(f_top, tp, COL_CORRECT, filled=True)
+        f_top = grid.highlight_wells(f_top, fp, COL_FP,      filled=True)
+        f_top = grid.highlight_wells(f_top, fn, COL_FN,      filled=False)
+
+        cv2.putText(f_fpv, "FPV",      (10, fh - 10), FONT, 0.5, COL_TEXT_FG, 1, cv2.LINE_AA)
+        cv2.putText(f_top, "Top-View", (10, fh - 10), FONT, 0.5, COL_TEXT_FG, 1, cv2.LINE_AA)
+
+        video_row = np.hstack([f_fpv, f_top])
+
+        header = np.full((HEADER_H, out_w, 3), 40, dtype=np.uint8)
+        line1 = f"Clip: {clip_id}  |  Instance #{instance_idx}  |  Type: {type_label}"
+        line2 = f"Frame {frame_idx+1}/{total}  |  {verdict}"
+        cv2.putText(header, line1, (10, 20), FONT, 0.48, COL_TEXT_FG, 1, cv2.LINE_AA)
+        cv2.putText(header, line2, (10, 40), FONT, 0.38, (170, 170, 170), 1, cv2.LINE_AA)
+
+        writer.write(np.vstack([header, video_row, panel]))
+        frame_idx += 1
+
+    cap_f.release()
+    cap_t.release()
+    writer.release()
+    logger.info(f"embed → {output_path} ({frame_idx} frames)")
+    return output_path
+
+
+def cmd_embed(args):
+    """Generate embedded model inference visualization for one or more instances."""
+    labels_path = Path(args.labels)
+    ckpt_path   = Path(args.checkpoint)
+
+    for p, label in [(labels_path, 'labels'), (ckpt_path, 'checkpoint')]:
+        if not p.exists():
+            logger.error(f"{label} not found: {p}")
+            return 1
+
+    labels = _load_json(labels_path)
+
+    # Parse instance specs: integers or "lo-hi" ranges
+    instance_indices: List[int] = []
+    for spec in args.instances:
+        if '-' in spec:
+            lo, hi = spec.split('-', 1)
+            instance_indices.extend(range(int(lo), int(hi) + 1))
+        else:
+            instance_indices.append(int(spec))
+    instance_indices = sorted(set(instance_indices))
+
+    bad = [i for i in instance_indices if i < 0 or i >= len(labels)]
+    if bad:
+        logger.error(f"Instance indices out of range [0..{len(labels)-1}]: {bad}")
+        return 1
+
+    logger.info(f"Loading model from {ckpt_path} ...")
+    model, has_type_head, cfg = _load_model_for_embed(ckpt_path)
+    img_size = cfg.get('img_size', 448)
+
+    video_dirs = [Path(d) for d in args.video_dirs] if args.video_dirs else []
+    default_data = PROJECT_ROOT / "data" / "pipette_well_dataset"
+    if default_data.exists():
+        video_dirs.append(default_data)
+
+    output_dir = (
+        Path(args.output_dir) if args.output_dir
+        else DEFAULT_VIZ_DIR / f"{_now_compact()}_embed"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ok, fail = 0, 0
+    for inst_idx in instance_indices:
+        entry   = labels[inst_idx]
+        fpv_key = entry.get('clip_id_FPV') or entry.get('fpv_clip_id') or entry.get('clip_id')
+        top_key = entry.get('clip_id_Topview') or entry.get('topview_clip_id') or entry.get('top_clip_id')
+        clip_id = _extract_clip_id(fpv_key or f"instance_{inst_idx}")
+
+        fpv_path, top_path = _find_videos(clip_id, video_dirs)
+        if not fpv_path or not top_path:
+            # Try raw key filenames directly
+            fpv_direct = default_data / f"{fpv_key}.mp4"
+            top_direct = default_data / f"{top_key}.mp4"
+            if fpv_direct.exists() and top_direct.exists():
+                fpv_path, top_path = fpv_direct, top_direct
+            else:
+                logger.warning(f"Videos not found for instance {inst_idx} ({clip_id}) — skipping")
+                fail += 1
+                continue
+
+        gt_wells = [
+            {'well_row': w['well_row'], 'well_column': int(w['well_column'])}
+            for w in entry.get('wells_ground_truth', [])
+        ]
+
+        logger.info(f"Instance {inst_idx}: {clip_id}  GT={len(gt_wells)} wells")
+        try:
+            inference = _run_embed_inference(
+                fpv_path, top_path, model, has_type_head, img_size, args.n_frames
+            )
+            out_path = output_dir / f"embed_{inst_idx:04d}_{clip_id}.mp4"
+            render_embed_clip(
+                fpv_path, top_path, inference, gt_wells or None,
+                clip_id, inst_idx, out_path,
+                panel_h=args.panel_height,
+                plate_bounds=tuple(args.plate_bounds),
+            )
+            ok += 1
+        except Exception as exc:
+            logger.error(f"Instance {inst_idx} ({clip_id}) failed: {exc}", exc_info=True)
+            fail += 1
+
+    logger.info(f"embed done: {ok} ok, {fail} failed → {output_dir}")
+    print(f"Output directory: {output_dir}")
+    return 0 if fail == 0 else 1
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -944,6 +1341,50 @@ def build_parser() -> argparse.ArgumentParser:
     p_heat.add_argument("--labels", required=True, help="Path to labels.json")
     p_heat.add_argument("--output-dir", default=None, help="Output directory for heatmap")
 
+    # ── embed ─────────────────────────────────────────────────────────────
+    p_emb = sub.add_parser(
+        "embed",
+        help="Run live model inference and render side-by-side video with metrics panel",
+    )
+    p_emb.add_argument(
+        "--instances", nargs="+", required=True, metavar="N",
+        help="Label indices to visualize: integers or lo-hi ranges, e.g. 0 3 7 10-15",
+    )
+    p_emb.add_argument(
+        "--checkpoint", default="checkpoints/best.pt",
+        help="Path to model checkpoint (default: checkpoints/best.pt)",
+    )
+    p_emb.add_argument(
+        "--labels", default="data/pipette_well_dataset/labels.json",
+        help="Path to labels.json",
+    )
+    p_emb.add_argument(
+        "--n-frames", type=int, default=4, dest="n_frames",
+        help="Number of frames to sample for inference (default: 4)",
+    )
+    p_emb.add_argument(
+        "--panel-height", type=int, default=155, dest="panel_height",
+        help="Height in pixels of the metrics panel (default: 155)",
+    )
+    p_emb.add_argument(
+        "--output-dir", default=None,
+        help="Output directory (default: outputs/visualizations/TIMESTAMP_embed/)",
+    )
+    p_emb.add_argument(
+        "--video-dirs", nargs="*", default=None,
+        help="Directories to search for video files",
+    )
+    p_emb.add_argument(
+        "--plate-bounds", nargs=4, type=float,
+        default=[0.0, 0.0, 1.0, 1.0],
+        metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"),
+        help=(
+            "Plate region as fractions of the topview frame (0.0–1.0). "
+            "Use this to align well circles with the actual plate. "
+            "Example: --plate-bounds 0.05 0.08 0.95 0.92 (default: full frame)"
+        ),
+    )
+
     return parser
 
 
@@ -956,10 +1397,11 @@ def main():
         return 1
 
     dispatch = {
-        "render": cmd_render,
-        "rank": cmd_rank,
+        "render":   cmd_render,
+        "rank":     cmd_rank,
         "annotate": cmd_annotate,
-        "heatmap": cmd_heatmap,
+        "heatmap":  cmd_heatmap,
+        "embed":    cmd_embed,
     }
 
     handler = dispatch.get(args.command)

@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_training.sh — v8 training launcher
+# run_training.sh — v9 training launcher
 #
 # S-3 FIX: Replaced hardcoded absolute paths with env-var overrides.
 # S-3 FIX: Device auto-detected (CUDA if available, else CPU).
@@ -11,6 +11,10 @@
 # v8:  Clip-type head: 3-class (single/row/col) + type_loss_weight=1.0.
 #       Type-conditioned inference: argmax strategy, no threshold at all.
 #       Architecture change → cannot resume from v7; fresh training from DINOv2.
+# v9:  Fix 1-5 from TRAINING_REPORT_v8:
+#       Fix 3: val decoder switched from typed-argmax to threshold=0.4.
+#       Fix 4: checkpoint criterion changed from val_loss to Jaccard@t=0.4.
+#       Fix 5: NUM_FRAMES 4→8 (architecture spec; was reduced for CPU speed).
 #
 # Usage:
 #   bash run_training.sh                      # use defaults
@@ -42,7 +46,7 @@ fi
 # ── Training hyper-params ──────────────────────────────────────────────────
 EPOCHS="${EPOCHS:-80}"
 BATCH_SIZE="${BATCH_SIZE:-2}"
-NUM_FRAMES="${NUM_FRAMES:-4}"
+NUM_FRAMES="${NUM_FRAMES:-8}"
 VAL_SPLIT="${VAL_SPLIT:-0.2}"
 IMG_SIZE="${IMG_SIZE:-448}"
 PATIENCE="${PATIENCE:-20}"                      # F-3: was 10
@@ -55,7 +59,7 @@ TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
 # No RESUME — v8 adds type_head to architecture, incompatible with v7 checkpoint
 
 # ── Launch ─────────────────────────────────────────────────────────────────
-echo "[run_training.sh] Starting training v8"
+echo "[run_training.sh] Starting training v9"
 echo "  DATA_DIR       : ${DATA_DIR}"
 echo "  LABELS         : ${LABELS}"
 echo "  OUTPUT         : ${OUTPUT_DIR}"
