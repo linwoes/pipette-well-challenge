@@ -29,6 +29,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data/pipette_well_dataset}"
 LABELS="${LABELS:-${DATA_DIR}/labels.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints}"
+TRAINING_OUTPUT_DIR="${TRAINING_OUTPUT_DIR:-${REPO_ROOT}/training_results}"
+TRAINING_VERS="${TRAINING_VERS:-v9}"    # v9: training version
 
 # ── Device auto-detect ─────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
@@ -56,10 +58,11 @@ COL_WEIGHT="${COL_WEIGHT:-2.0}"                # v6: upweight column head
 LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
 TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
+
 # No RESUME — v8 adds type_head to architecture, incompatible with v7 checkpoint
 
 # ── Launch ─────────────────────────────────────────────────────────────────
-echo "[run_training.sh] Starting training v9"
+echo "[run_training.sh] Starting training ${TRAINING_VERS}"
 echo "  DATA_DIR       : ${DATA_DIR}"
 echo "  LABELS         : ${LABELS}"
 echo "  OUTPUT         : ${OUTPUT_DIR}"
@@ -87,4 +90,4 @@ echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
   --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
-  2>&1 | tee "${REPO_ROOT}/training.log"
+  2>&1 | tee "${TRAINING_OUTPUT_DIR}/training_${TRAINING_VERS}.log"
