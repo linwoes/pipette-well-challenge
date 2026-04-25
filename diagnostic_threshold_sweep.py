@@ -19,7 +19,6 @@ model = DualViewFusion(
     use_lora=cfg.get('use_lora', True),
     lora_rank=cfg.get('lora_rank', 4),
     temporal_layers=cfg.get('temporal_layers', 1),
-    use_dinov2=cfg.get('use_dinov2', True),
     img_size=cfg.get('img_size', 448),
 )
 model.load_state_dict(checkpoint['model_state_dict'])
