@@ -421,10 +421,13 @@ class Trainer:
 
         return optim.lr_scheduler.LambdaLR(self.optimizer, lr_lambda)
 
-    def train_epoch(self) -> float:
-        """Train for one epoch."""
+    def train_epoch(self) -> Tuple[float, Dict]:
+        """Train for one epoch. Returns (avg_loss, train_metrics_dict)."""
         self.model.train()
         total_loss = 0.0
+
+        all_row_preds, all_col_preds, all_type_preds = [], [], []
+        all_row_targets, all_col_targets = [], []
 
         for fpv, topview, row_labels, col_labels in tqdm(self.train_loader, desc='Training'):
             fpv = fpv.to(self.device)
@@ -454,8 +457,17 @@ class Trainer:
                 self.optimizer.step()
 
             total_loss += loss.item()
+            all_row_preds.append(row_logits.detach().cpu().numpy())
+            all_col_preds.append(col_logits.detach().cpu().numpy())
+            all_type_preds.append(type_logits.detach().cpu().numpy())
+            all_row_targets.append(row_labels.detach().cpu().numpy())
+            all_col_targets.append(col_labels.detach().cpu().numpy())
 
-        return total_loss / len(self.train_loader)
+        train_metrics = self._compute_metrics(
+            np.vstack(all_row_preds), np.vstack(all_col_preds), np.vstack(all_type_preds),
+            np.vstack(all_row_targets), np.vstack(all_col_targets),
+        )
+        return total_loss / len(self.train_loader), train_metrics
 
     def validate(self) -> Tuple[float, Dict]:
         """Validate on validation set."""
@@ -486,45 +498,60 @@ class Trainer:
                 all_row_targets.append(row_labels.cpu().numpy())
                 all_col_targets.append(col_labels.cpu().numpy())
 
-        # Compute metrics using threshold=0.4 decoder (Fix 3).
-        # Diagnostic sweep showed threshold=0.4 gives 55% exact match on the
-        # epoch-33 checkpoint vs 0-5% with the typed argmax decoder (which
-        # collapses to top-1 col for full-column clips).  Using t=0.4 here
-        # ensures early stopping and checkpointing respond to real accuracy.
-        from src.postprocessing.output_formatter import logits_to_wells
-        row_preds_all   = np.vstack(all_row_preds)
-        col_preds_all   = np.vstack(all_col_preds)
-        row_targets_all = np.vstack(all_row_targets)
-        col_targets_all = np.vstack(all_col_targets)
+        metrics = self._compute_metrics(
+            np.vstack(all_row_preds), np.vstack(all_col_preds), np.vstack(all_type_preds),
+            np.vstack(all_row_targets), np.vstack(all_col_targets),
+        )
+        metrics['val_loss'] = total_loss / len(self.val_loader)
+        return metrics['val_loss'], metrics
 
-        exact_match_scores = []
-        jaccard_scores = []
-        cardinality_scores = []
+    @staticmethod
+    def _compute_metrics(row_preds, col_preds, type_preds, row_targets, col_targets) -> Dict:
+        """
+        Compute prediction metrics with both decoders for diagnostic comparison.
+
+        Primary decoder: type-conditioned (uses type_head argmax to choose strategy
+        — single→top1×top1, row→top1×all_cols, col→all_rows×top1). No threshold,
+        cardinality always matches the predicted type. This is what drives the
+        Jaccard / exact_match metrics used for checkpointing.
+
+        Secondary diagnostic: threshold=0.4 decoder. Logged as jaccard_thresh so we
+        can see when the spatial heads are strong enough that thresholding works.
+        """
+        from src.postprocessing.output_formatter import logits_to_wells, logits_to_wells_typed
+
         row_letters = 'ABCDEFGH'
-        for i in range(len(row_preds_all)):
-            pred_wells = logits_to_wells(row_preds_all[i], col_preds_all[i], threshold=0.4)
-            if not pred_wells:
-                # Fallback to top-1×top-1 if threshold yields nothing
-                r = int(np.argmax(row_preds_all[i]))
-                c = int(np.argmax(col_preds_all[i]))
-                pred_wells = [{'well_row': row_letters[r], 'well_column': c + 1}]
-            row_target_idx = np.where(row_targets_all[i])[0]
-            col_target_idx = np.where(col_targets_all[i])[0]
+        em_typed, jac_typed, card_typed = [], [], []
+        em_thresh, jac_thresh = [], []
+
+        for i in range(len(row_preds)):
+            row_target_idx = np.where(row_targets[i])[0]
+            col_target_idx = np.where(col_targets[i])[0]
             target_wells = [{'well_row': row_letters[r], 'well_column': int(c + 1)}
                             for r in row_target_idx for c in col_target_idx]
 
-            exact_match_scores.append(exact_match(pred_wells, target_wells))
-            jaccard_scores.append(jaccard_similarity(pred_wells, target_wells))
-            cardinality_scores.append(cardinality_accuracy(pred_wells, target_wells))
+            # Primary: type-conditioned decoder
+            pred_typed = logits_to_wells_typed(row_preds[i], col_preds[i], type_preds[i])
+            em_typed.append(exact_match(pred_typed, target_wells))
+            jac_typed.append(jaccard_similarity(pred_typed, target_wells))
+            card_typed.append(cardinality_accuracy(pred_typed, target_wells))
 
-        metrics = {
-            'val_loss':        total_loss / len(self.val_loader),
-            'exact_match':     np.mean(exact_match_scores),
-            'jaccard':         np.mean(jaccard_scores),
-            'cardinality_acc': np.mean(cardinality_scores),
+            # Diagnostic: threshold decoder (so we can compare)
+            pred_thresh = logits_to_wells(row_preds[i], col_preds[i], threshold=0.4)
+            if not pred_thresh:
+                r = int(np.argmax(row_preds[i]))
+                c = int(np.argmax(col_preds[i]))
+                pred_thresh = [{'well_row': row_letters[r], 'well_column': c + 1}]
+            em_thresh.append(exact_match(pred_thresh, target_wells))
+            jac_thresh.append(jaccard_similarity(pred_thresh, target_wells))
+
+        return {
+            'exact_match':     float(np.mean(em_typed)),
+            'jaccard':         float(np.mean(jac_typed)),
+            'cardinality_acc': float(np.mean(card_typed)),
+            'exact_match_thresh': float(np.mean(em_thresh)),
+            'jaccard_thresh':     float(np.mean(jac_thresh)),
         }
-
-        return metrics['val_loss'], metrics
 
     def train(self, start_epoch: int = 0):
         """Main training loop."""
@@ -534,14 +561,19 @@ class Trainer:
             logger.info(f"\nEpoch {epoch + 1}/{self.epochs}")
 
             # Train
-            train_loss = self.train_epoch()
-            logger.info(f"Train loss: {train_loss:.4f}")
+            train_loss, train_metrics = self.train_epoch()
+            logger.info(f"Train loss: {train_loss:.4f}  "
+                        f"jaccard(typed)={train_metrics['jaccard']:.4f}  "
+                        f"exact_match={train_metrics['exact_match']:.4f}  "
+                        f"jaccard(thresh)={train_metrics['jaccard_thresh']:.4f}")
 
             # Validate
             val_loss, metrics = self.validate()
             logger.info(f"Val loss: {val_loss:.4f}")
-            logger.info(f"Exact match: {metrics['exact_match']:.4f}")
-            logger.info(f"Jaccard: {metrics['jaccard']:.4f}")
+            logger.info(f"Exact match (typed): {metrics['exact_match']:.4f}  "
+                        f"(thresh={metrics['exact_match_thresh']:.4f})")
+            logger.info(f"Jaccard (typed): {metrics['jaccard']:.4f}  "
+                        f"(thresh={metrics['jaccard_thresh']:.4f})")
             logger.info(f"Cardinality acc: {metrics['cardinality_acc']:.4f}")
 
             # LR scheduler step

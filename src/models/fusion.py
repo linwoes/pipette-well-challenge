@@ -387,30 +387,15 @@ class WellDetectionLoss(nn.Module):
                 col_targets.unsqueeze(1).float(),  # (B, 1, 12)
             )  # (B, 8, 12) — Cartesian product of row/col marginals
 
-            # Per-sample rectangularity mask: 1 where GT == Cartesian product.
-            # If a sample's well pattern is not rectangular, its consistency
-            # loss contribution is zeroed out to avoid incorrect supervision.
-            #
-            # For a rectangular pattern (GT_well_ij == row_i AND col_j for all
-            # active wells) the Cartesian product exactly equals the true GT
-            # and the mask is 1. For scatter patterns (e.g. {A1,C3}) the
-            # Cartesian product adds phantom wells (A3, C1) and the mask is 0.
-            is_rectangular = (gt_cart == gt_cart).all(dim=(1, 2))  # placeholder shape
-            # Compute actual GT well grid from labels (if passed directly, use gt_cart)
-            # Check: does the Cartesian product match an independent well-level GT?
-            # Since we only have row/col targets (not per-well GT), we detect
-            # non-rectangular patterns by checking if |active rows| * |active cols|
-            # equals |active wells via OR-marginals| (which equals total active Cartesian cells).
-            active_rows = row_targets.sum(dim=1)      # (B,) — number of active rows
-            active_cols = col_targets.sum(dim=1)      # (B,) — number of active columns
-            cart_count = active_rows * active_cols    # (B,) — cells in Cartesian product
-
-            # Heuristic: if cart_count > 1 and neither a full row nor full col
-            # pattern, we cannot verify rectangularity without per-well GT.
-            # Conservative rule: apply loss only to patterns that are provably
-            # rectangular — i.e., single row, single column, or single well.
-            # For multi-row × multi-col patterns, skip (set weight to 0).
-            is_safe = (active_rows <= 1) | (active_cols <= 1)  # (B,) bool
+            # Without per-well GT we can't verify rectangularity directly. For
+            # this dataset all GT patterns are single (1×1), full-row (1×12),
+            # or full-col (8×1), all of which satisfy active_rows<=1 OR
+            # active_cols<=1 — so the Cartesian product exactly equals GT and
+            # the consistency loss is valid. Multi-row × multi-col scatter
+            # patterns would generate phantom wells, so we skip them.
+            active_rows = row_targets.sum(dim=1)      # (B,)
+            active_cols = col_targets.sum(dim=1)      # (B,)
+            is_safe = (active_rows <= 1) | (active_cols <= 1)
 
             if is_safe.any():
                 # Only compute loss over safe (rectangular) samples
