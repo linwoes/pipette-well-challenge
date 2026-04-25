@@ -174,8 +174,8 @@ class PipetteWellDataset(Dataset):
 
         # Load and preprocess videos
         try:
-            fpv_frames = load_video(str(fpv_path), max_frames=self.num_frames)  # (N, H, W, 3)
-            topview_frames = load_video(str(topview_path), max_frames=self.num_frames)
+            fpv_frames = load_video(str(fpv_path), max_frames=self.num_frames, temporal_jitter=self.augment)
+            topview_frames = load_video(str(topview_path), max_frames=self.num_frames, temporal_jitter=self.augment)
 
             # Align to same length
             fpv_frames, topview_frames = align_clips(fpv_frames, topview_frames)
@@ -400,8 +400,12 @@ class Trainer:
         # Mixed precision scaler
         self.scaler = torch.cuda.amp.GradScaler() if device.startswith('cuda') else None
 
-        # Early stopping — tracked on Jaccard@t=0.4 (Fix 4)
+        # Hybrid checkpoint/early-stopping criterion:
+        # Save when Jaccard improves (primary) OR val_loss improves (fallback).
+        # Patience resets on either improvement so early stopping doesn't fire
+        # while the model is still learning, even if Jaccard is noisy.
         self.best_jaccard = 0.0
+        self.best_val_loss = float('inf')
         self.patience_counter = 0
 
     def _build_scheduler(self, total_epochs: int, warmup_epochs: int):
@@ -543,12 +547,22 @@ class Trainer:
             # LR scheduler step
             self.scheduler.step()
 
-            # Save best model — checkpoint on Jaccard@t=0.4 (Fix 4)
-            if metrics['jaccard'] > self.best_jaccard:
+            # Hybrid checkpoint criterion: save on Jaccard improvement (primary)
+            # or val_loss improvement (fallback while Jaccard is noisy early in training).
+            # Patience resets on either improvement.
+            jaccard_improved = metrics['jaccard'] > self.best_jaccard
+            loss_improved = metrics['val_loss'] < self.best_val_loss
+
+            if jaccard_improved:
                 self.best_jaccard = metrics['jaccard']
+            if loss_improved:
+                self.best_val_loss = metrics['val_loss']
+
+            if jaccard_improved or loss_improved:
                 self.patience_counter = 0
                 self._save_checkpoint(epoch, metrics)
-                logger.info(f"Saved best checkpoint at epoch {epoch + 1}")
+                trigger = 'jaccard+loss' if (jaccard_improved and loss_improved) else ('jaccard' if jaccard_improved else 'val_loss')
+                logger.info(f"Saved best checkpoint at epoch {epoch + 1} ({trigger})")
             else:
                 self.patience_counter += 1
                 if self.patience_counter >= self.patience:
@@ -699,11 +713,12 @@ def main():
         trainer.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         trainer.scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         trainer.best_jaccard = ckpt.get('jaccard', 0.0)
+        trainer.best_val_loss = ckpt.get('val_loss', float('inf'))
         start_epoch = ckpt['epoch'] + 1
         logger.info(
             f"Resumed at epoch {start_epoch} | "
             f"best jaccard={ckpt.get('jaccard', 0.0):.4f} | "
-            f"val_loss={ckpt['val_loss']:.4f}"
+            f"best val_loss={ckpt.get('val_loss', float('inf')):.4f}"
         )
 
     # Train (from start_epoch if resuming)

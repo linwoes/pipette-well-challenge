@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_training.sh — v9 training launcher
+# run_training.sh — v10 training launcher
 #
 # S-3 FIX: Replaced hardcoded absolute paths with env-var overrides.
 # S-3 FIX: Device auto-detected (CUDA if available, else CPU).
@@ -15,6 +15,10 @@
 #       Fix 3: val decoder switched from typed-argmax to threshold=0.4.
 #       Fix 4: checkpoint criterion changed from val_loss to Jaccard@t=0.4.
 #       Fix 5: NUM_FRAMES 4→8 (architecture spec; was reduced for CPU speed).
+# v10: Hybrid checkpoint criterion: save on Jaccard OR val_loss improvement.
+#       Prevents early stopping firing before spatial learning matures.
+#       Resumes from v9 best.pt (epoch 5).
+#       Uses combined real+synthetic labels (800 clips) for training.
 #
 # Usage:
 #   bash run_training.sh                      # use defaults
@@ -30,7 +34,8 @@ DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data/pipette_well_dataset}"
 LABELS="${LABELS:-${DATA_DIR}/labels.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints}"
 TRAINING_OUTPUT_DIR="${TRAINING_OUTPUT_DIR:-${REPO_ROOT}/training_results}"
-TRAINING_VERS="${TRAINING_VERS:-v9}"    # v9: training version
+TRAINING_VERS="${TRAINING_VERS:-v10}"   # v10: hybrid checkpoint + synthetic data
+RESUME="${RESUME:-${REPO_ROOT}/checkpoints/best.pt}"  # resume from v9 epoch-5 checkpoint
 
 # ── Device auto-detect ─────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
@@ -59,7 +64,7 @@ LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
 TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
 
-# No RESUME — v8 adds type_head to architecture, incompatible with v7 checkpoint
+# RESUME from v9 best.pt — same architecture, compatible checkpoint
 
 # ── Launch ─────────────────────────────────────────────────────────────────
 echo "[run_training.sh] Starting training ${TRAINING_VERS}"
@@ -72,10 +77,23 @@ echo "  IMG_SIZE       : ${IMG_SIZE}  FRAMES: ${NUM_FRAMES}  BATCH: ${BATCH_SIZE
 echo "  FOCAL_GAMMA    : ${FOCAL_GAMMA}  COL_WEIGHT: ${COL_WEIGHT}"
 echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
 echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
+echo "  RESUME         : ${RESUME:-none}"
+
+# Auto-use combined labels unless USE_COMBINED=0 is set
+# Set USE_COMBINED=0 to force real-only labels (clean val set, no leakage)
+EFFECTIVE_LABELS="${LABELS}"
+COMBINED_LABELS="${DATA_DIR}/labels_combined.json"
+USE_COMBINED="${USE_COMBINED:-1}"
+if [ "${USE_COMBINED}" = "1" ] && [ -f "${COMBINED_LABELS}" ]; then
+    EFFECTIVE_LABELS="${COMBINED_LABELS}"
+    echo "  LABELS (combined): ${EFFECTIVE_LABELS}"
+else
+    echo "  LABELS (real only): ${EFFECTIVE_LABELS}"
+fi
 
 "${PYTHON}" "${REPO_ROOT}/train.py" \
   --data_dir                "${DATA_DIR}" \
-  --labels                  "${LABELS}" \
+  --labels                  "${EFFECTIVE_LABELS}" \
   --epochs                  "${EPOCHS}" \
   --batch_size              "${BATCH_SIZE}" \
   --num_frames              "${NUM_FRAMES}" \
@@ -90,4 +108,5 @@ echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
   --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
+  ${RESUME:+--resume "${RESUME}"} \
   2>&1 | tee "${TRAINING_OUTPUT_DIR}/training_${TRAINING_VERS}.log"

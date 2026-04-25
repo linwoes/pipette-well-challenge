@@ -21,13 +21,16 @@ import math
 from typing import Tuple
 
 
-def load_video(path: str, max_frames: int = 8) -> np.ndarray:
+def load_video(path: str, max_frames: int = 8, temporal_jitter: bool = False) -> np.ndarray:
     """
     Load video frames and sample evenly across video duration.
 
     Args:
         path: Path to MP4 or video file
         max_frames: Maximum number of frames to extract (default 8)
+        temporal_jitter: If True, randomly shrink the sampling window by up to
+            25% on each end so the model sees different temporal slices of the
+            same clip on each training epoch (default False).
 
     Returns:
         frames: (N, H, W, 3) numpy array in RGB format
@@ -46,8 +49,15 @@ def load_video(path: str, max_frames: int = 8) -> np.ndarray:
     if frame_count == 0:
         raise IOError(f"Video has no frames: {path}")
 
-    # Calculate frame indices to sample evenly
-    frame_indices = np.linspace(0, frame_count - 1, max_frames, dtype=int)
+    # Calculate frame indices to sample evenly, with optional temporal jitter
+    if temporal_jitter and frame_count > max_frames:
+        max_offset = max(1, frame_count // 4)
+        start = np.random.randint(0, max_offset)
+        end = frame_count - 1 - np.random.randint(0, max_offset)
+        end = max(end, start + max_frames)  # ensure window is wide enough
+        frame_indices = np.linspace(start, end, max_frames, dtype=int)
+    else:
+        frame_indices = np.linspace(0, frame_count - 1, max_frames, dtype=int)
 
     frames = []
     for idx in frame_indices:
