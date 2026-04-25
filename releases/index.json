@@ -1,1 +1,15 @@
-[]
+[
+  {
+    "version": "20260425.edb3173",
+    "packaged_at": "2026-04-25T19:36:43.080499+00:00",
+    "git_hash": "edb3173",
+    "epoch": 4,
+    "metrics": {
+      "jaccard": 0.06071428571428571,
+      "val_loss": 0.6498059034347534,
+      "exact_match": 0.0,
+      "cardinality_acc": 0.3
+    },
+    "notes": "v9 epoch-5 baseline; Jaccard 0.06 \u2014 model in early spatial learning phase, used as resume seed for v10 hybrid-criterion training."
+  }
+]

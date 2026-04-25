@@ -1,0 +1,37 @@
+{
+  "version": "20260425.edb3173",
+  "packaged_at": "2026-04-25T19:36:43.080499+00:00",
+  "git": {
+    "hash": "edb31732452df2fe4d866c1b2e930ea21ddea4c1",
+    "short_hash": "edb3173",
+    "branch": "main",
+    "commit_message": "Add versioned release system with make_release.py",
+    "commit_date": "2026-04-25T15:36:26-04:00",
+    "dirty": true
+  },
+  "checkpoint": {
+    "epoch": 4,
+    "metrics": {
+      "jaccard": 0.06071428571428571,
+      "val_loss": 0.6498059034347534,
+      "exact_match": 0.0,
+      "cardinality_acc": 0.3
+    },
+    "model_config": {
+      "num_rows": 8,
+      "num_columns": 12,
+      "shared_backbone": true,
+      "use_lora": true,
+      "lora_rank": 4,
+      "temporal_layers": 1,
+      "use_dinov2": true,
+      "img_size": 448
+    }
+  },
+  "notes": "v9 epoch-5 baseline; Jaccard 0.06 \u2014 model in early spatial learning phase, used as resume seed for v10 hybrid-criterion training.",
+  "inference": {
+    "command": "python inference.py --model releases/20260425.edb3173/model.pt --fpv <fpv.mp4> --topview <top.mp4>",
+    "threshold": 0.4,
+    "img_size": 448
+  }
+}

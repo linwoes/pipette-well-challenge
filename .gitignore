@@ -145,6 +145,14 @@ models/*.pt
 *.zip
 *.tar
 
+# Release weights — too large for git; track metadata only
+releases/*/model.pt
+
+# Synthetic dataset files — generated locally, not committed
+data/pipette_well_dataset/labels_synthetic.json
+data/pipette_well_dataset/labels_combined.json
+data/pipette_well_dataset/Synth_*.mp4
+
 # Temporary files
 temp/
 tmp/
