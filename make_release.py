@@ -6,23 +6,29 @@ Version format: YYYYMMDD.<7-char-git-hash>
   - Sortable by date, pinned to exact source commit.
   - Date is UTC date of packaging.
 
+Symlinks maintained in releases/:
+  latest    → most recently packaged release
+  deployed  → highest-performing validated release (set with --deploy)
+
 Usage:
-  python make_release.py                          # package checkpoints/best.pt
+  python make_release.py                            # package checkpoints/best.pt
   python make_release.py --checkpoint path/to/x.pt
   python make_release.py --notes "Reached 0.42 Jaccard after 40 epochs"
-  python make_release.py --dry-run                # preview without writing
+  python make_release.py --deploy                   # also mark as deployed
+  python make_release.py --deploy-only <version>    # mark existing release as deployed
+  python make_release.py --dry-run                  # preview without writing
 
 Output:
   releases/<version>/model.pt
   releases/<version>/config.json
   releases/<version>/RELEASE_NOTES.md
-  releases/latest  -> <version>  (symlink updated)
-  releases/index.json            (registry updated)
+  releases/latest    -> <version>  (always updated)
+  releases/deployed  -> <version>  (only updated with --deploy or --deploy-only)
+  releases/index.json              (registry updated, deployed field set)
 """
 
 import argparse
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -74,7 +80,16 @@ def load_checkpoint_metadata(checkpoint_path: Path) -> dict:
     }
 
 
-def update_index(version: str, config: dict, dry_run: bool):
+def update_symlink(name: str, version: str, dry_run: bool):
+    link = RELEASES_DIR / name
+    if not dry_run:
+        if link.is_symlink() or link.exists():
+            link.unlink()
+        link.symlink_to(version)
+    print(f'{"[dry-run] Would update" if dry_run else "Updated  :"} releases/{name} -> {version}')
+
+
+def update_index(version: str, config: dict, deployed: bool, dry_run: bool):
     index_path = RELEASES_DIR / 'index.json'
     entries = json.loads(index_path.read_text()) if index_path.exists() else []
 
@@ -84,13 +99,24 @@ def update_index(version: str, config: dict, dry_run: bool):
         'git_hash': config['git']['short_hash'],
         'epoch': config['checkpoint']['epoch'],
         'metrics': config['checkpoint']['metrics'],
+        'deployed': deployed,
         'notes': config.get('notes', ''),
     }
 
     # Replace existing entry for same version, otherwise append
-    entries = [e for e in entries if e['version'] != version]
-    entries.append(entry)
-    entries.sort(key=lambda e: e['version'], reverse=True)
+    existing = {e['version']: e for e in entries}
+    if version in existing:
+        existing[version].update(entry)
+    else:
+        existing[version] = entry
+
+    # If marking as deployed, clear deployed flag on all others
+    if deployed:
+        for v, e in existing.items():
+            if v != version:
+                e['deployed'] = False
+
+    entries = sorted(existing.values(), key=lambda e: e['version'], reverse=True)
 
     if not dry_run:
         index_path.write_text(json.dumps(entries, indent=2) + '\n')
@@ -148,15 +174,41 @@ python inference.py --model releases/{version}/model.pt --fpv fpv.mp4 --topview 
         print(content)
 
 
+def cmd_deploy_only(version: str, dry_run: bool):
+    release_dir = RELEASES_DIR / version
+    if not release_dir.exists():
+        print(f'ERROR: release not found: {release_dir}', file=sys.stderr)
+        sys.exit(1)
+
+    config_path = release_dir / 'config.json'
+    config = json.loads(config_path.read_text())
+    m = config['checkpoint']['metrics']
+    print(f'Deploying : {version}')
+    print(f'Jaccard   : {m["jaccard"]:.4f}  |  Val Loss: {m["val_loss"]:.4f}')
+
+    update_symlink('deployed', version, dry_run)
+    update_index(version, config, deployed=True, dry_run=dry_run)
+    if not dry_run:
+        print(f'\nreleases/deployed now points to {version}')
+
+
 def main():
     parser = argparse.ArgumentParser(description='Package a checkpoint as a versioned release')
     parser.add_argument('--checkpoint', default=str(DEFAULT_CHECKPOINT),
                         help='Path to checkpoint file (default: checkpoints/best.pt)')
     parser.add_argument('--notes', default='',
                         help='Release notes (what changed, known issues, etc.)')
+    parser.add_argument('--deploy', action='store_true',
+                        help='Also update the deployed symlink to this release')
+    parser.add_argument('--deploy-only', metavar='VERSION',
+                        help='Mark an existing release as deployed without re-packaging')
     parser.add_argument('--dry-run', action='store_true',
                         help='Preview without writing any files')
     args = parser.parse_args()
+
+    if args.deploy_only:
+        cmd_deploy_only(args.deploy_only, args.dry_run)
+        return
 
     checkpoint_path = Path(args.checkpoint)
     if not checkpoint_path.exists():
@@ -176,6 +228,8 @@ def main():
     print(f'Commit    : {git["hash"]} ({git["branch"]})')
     if git['dirty']:
         print('Dirty     : YES — uncommitted changes present')
+    if args.deploy:
+        print('Deploy    : YES — will update releases/deployed')
 
     ckpt_meta = load_checkpoint_metadata(checkpoint_path)
     m = ckpt_meta['metrics']
@@ -199,35 +253,30 @@ def main():
     if args.dry_run:
         print('\n[dry-run] No files written.')
         write_release_notes(release_dir / 'RELEASE_NOTES.md', version, config, args.notes, dry_run=True)
-        update_index(version, config, dry_run=True)
+        update_index(version, config, deployed=args.deploy, dry_run=True)
         return
 
     release_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy weights
     shutil.copy2(checkpoint_path, release_dir / 'model.pt')
     print(f'\nCopied    : model.pt ({checkpoint_path.stat().st_size / 1e6:.1f} MB)')
 
-    # Write config
     (release_dir / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
     print(f'Wrote     : config.json')
 
-    # Write release notes
     write_release_notes(release_dir / 'RELEASE_NOTES.md', version, config, args.notes, dry_run=False)
     print(f'Wrote     : RELEASE_NOTES.md')
 
-    # Update latest symlink
-    latest = RELEASES_DIR / 'latest'
-    if latest.is_symlink() or latest.exists():
-        latest.unlink()
-    latest.symlink_to(version)
-    print(f'Updated   : releases/latest -> {version}')
+    update_symlink('latest', version, dry_run=False)
+    if args.deploy:
+        update_symlink('deployed', version, dry_run=False)
 
-    # Update index
-    update_index(version, config, dry_run=False)
-    print(f'Updated   : releases/index.json')
+    update_index(version, config, deployed=args.deploy, dry_run=False)
+    print(f'Updated  : releases/index.json')
 
     print(f'\nRelease {version} ready.')
+    if args.deploy:
+        print(f'  releases/deployed -> {version}')
     print(f'  python inference.py --model releases/{version}/model.pt --fpv fpv.mp4 --topview top.mp4')
 
 

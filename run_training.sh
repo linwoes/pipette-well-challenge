@@ -1,29 +1,28 @@
 #!/bin/bash
-# run_training.sh — v10 training launcher
+# run_training.sh — training launcher
 #
-# S-3 FIX: Replaced hardcoded absolute paths with env-var overrides.
-# S-3 FIX: Device auto-detected (CUDA if available, else CPU).
-# F-3 FIX: early_stopping_patience increased to 20 (was 10).
-# F-4 FIX: well_consistency_weight lowered to 0.2 (was 0.5).
-# v6:  LoRA gradient flow fix (removed no_grad from backbone calls).
-#       focal_gamma=0, col_weight=2.0, lora_rank=4, temporal_layers=1.
-# v7:  val_threshold 0.3→0.4 (diagnostic showed 0.3 masked 60% exact match).
-# v8:  Clip-type head: 3-class (single/row/col) + type_loss_weight=1.0.
-#       Type-conditioned inference: argmax strategy, no threshold at all.
-#       Architecture change → cannot resume from v7; fresh training from DINOv2.
-# v9:  Fix 1-5 from TRAINING_REPORT_v8:
-#       Fix 3: val decoder switched from typed-argmax to threshold=0.4.
-#       Fix 4: checkpoint criterion changed from val_loss to Jaccard@t=0.4.
-#       Fix 5: NUM_FRAMES 4→8 (architecture spec; was reduced for CPU speed).
-# v10: Hybrid checkpoint criterion: save on Jaccard OR val_loss improvement.
-#       Prevents early stopping firing before spatial learning matures.
-#       Resumes from v9 best.pt (epoch 5).
-#       Uses combined real+synthetic labels (800 clips) for training.
+# Training runs are identified by YYYYMMDD.<git-hash> (same scheme as releases).
+# TRAINING_VERS is auto-computed from the current date + HEAD hash unless overridden.
+# Log files are written to training_results/training_<TRAINING_VERS>.log.
+#
+# Changelog (historical — pre-date+hash versioning):
+#   S-3: Replaced hardcoded absolute paths with env-var overrides.
+#   S-3: Device auto-detected (CUDA if available, else CPU).
+#   F-3: early_stopping_patience increased to 20 (was 10).
+#   F-4: well_consistency_weight lowered to 0.2 (was 0.5).
+#   v6:  LoRA gradient flow fix; focal_gamma=0, col_weight=2.0, lora_rank=4, temporal_layers=1.
+#   v7:  val_threshold 0.3→0.4 (diagnostic showed 0.3 masked 60% exact match).
+#   v8:  Clip-type head: 3-class (single/row/col) + type_loss_weight=1.0.
+#        Architecture change — cannot resume from v7; fresh training from DINOv2.
+#   v9:  Fix 3: val decoder → threshold=0.4. Fix 4: checkpoint on Jaccard. Fix 5: NUM_FRAMES 4→8.
+#   v10: Hybrid checkpoint criterion (Jaccard OR val_loss). Temporal jitter. Resumes from v9/epoch-5.
 #
 # Usage:
-#   bash run_training.sh                      # use defaults
+#   bash run_training.sh                      # auto-versioned, real labels only
+#   USE_COMBINED=1 bash run_training.sh       # use combined real+synthetic labels
 #   DATA_DIR=/my/data bash run_training.sh    # override data path
 #   DEVICE=cuda:0 bash run_training.sh        # force GPU
+#   TRAINING_VERS=custom bash run_training.sh # override auto-version
 
 set -euo pipefail
 
@@ -34,8 +33,10 @@ DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data/pipette_well_dataset}"
 LABELS="${LABELS:-${DATA_DIR}/labels.json}"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/checkpoints}"
 TRAINING_OUTPUT_DIR="${TRAINING_OUTPUT_DIR:-${REPO_ROOT}/training_results}"
-TRAINING_VERS="${TRAINING_VERS:-v10}"   # v10: hybrid checkpoint + synthetic data
-RESUME="${RESUME:-${REPO_ROOT}/checkpoints/best.pt}"  # resume from v9 epoch-5 checkpoint
+_GIT_HASH="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+_DATE="$(date -u +%Y%m%d)"
+TRAINING_VERS="${TRAINING_VERS:-${_DATE}.${_GIT_HASH}}"
+RESUME="${RESUME:-${REPO_ROOT}/checkpoints/best.pt}"
 
 # ── Device auto-detect ─────────────────────────────────────────────────────
 PYTHON="${PYTHON:-python3}"
