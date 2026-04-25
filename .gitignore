@@ -133,7 +133,7 @@ dmypy.json
 # Project-specific
 models/*.pth
 models/*.pt
-*.mp4
+# *.mp4, *.pt in releases/ and checkpoints/ are tracked via Git LFS (.gitattributes)
 *.avi
 *.mov
 *.mkv
@@ -145,13 +145,8 @@ models/*.pt
 *.zip
 *.tar
 
-# Release weights — too large for git; track metadata only
-releases/*/model.pt
-
-# Synthetic dataset files — generated locally, not committed
-data/pipette_well_dataset/labels_synthetic.json
-data/pipette_well_dataset/labels_combined.json
-data/pipette_well_dataset/Synth_*.mp4
+# Release weights, synthetic labels, and synthetic/real MP4s are tracked
+# via Git LFS (see .gitattributes) — do not add ignore rules for them here.
 
 # Temporary files
 temp/
