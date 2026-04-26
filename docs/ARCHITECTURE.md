@@ -629,7 +629,7 @@ This correction is **CRITICAL** because it:
 
 **NON-NEGOTIABLE CONSTRAINTS:**
 - **Late fusion everywhere** (geometrically mandated, not optional)
-- **DINOv2-ViT-B/14 + LoRA is the primary** (ResNet-18 is deprecated 2015 technology; sandbox fallback only)
+- **DINOv2-ViT-B/14 + LoRA is the only backbone path** (ResNet-18 fallback was removed in commit d5b8f04; the "Why ResNet-18 is Deprecated" section below remains as comparative justification)
 - **Temporal Transformer mandatory** (single-frame models insufficient)
 - Synthetic data generation (scale beyond N=100)
 - 20-minute TOTAL batch budget 

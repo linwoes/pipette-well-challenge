@@ -25,29 +25,29 @@ This is **NOT ResNet-18.** This is **NOT VideoMAE.** This is **DINOv2.**
 4. **Few-shot superiority:** DINOv2 ViT-B outperforms ResNet-50 by +8 percentage points at 10-shot (published benchmarks, Oquab et al. 2023)
 5. **Self-supervised pre-training:** DINO contrastive learning (not ImageNet supervised) learns semantic geometry without label bias
 
-**Sandbox note:** The sandbox environment cannot download pretrained weights (proxy restriction). Training in sandbox uses LegacyResNet18Backbone (random init) as a functional fallback only. This is a **deployment constraint, NOT an architectural decision.** Production MUST use DINOv2.
+**Backbone status (April 2026):** DINOv2 weights are downloaded from Hugging Face Hub at training start. The earlier `LegacyResNet18Backbone` random-init fallback was kept while sandbox proxy restrictions blocked weight downloads; once those constraints lifted, the fallback was removed entirely (commit d5b8f04). DINOv2 is now the only backbone path — there is no `use_dinov2` flag and no `--backbone` CLI argument.
 
-**Architecture:** 
+**Architecture:**
 ```
-FPV Video (8 frames) → DINOv2-ViT-B/14 (frozen) + LoRA → [196, 768] patch features
-                    → Temporal Transformer (2 layers) → [768] pooled
-                                                      ↓ Late Fusion
-Top-view Video (8 frames) → DINOv2-ViT-B/14 (frozen) + LoRA → [196, 768] patch features
-                          → Temporal Transformer (2 layers) → [768] pooled
+FPV Video (8 frames) → DINOv2-ViT-B/14 (frozen) + LoRA r=4 → patch features
+                    → Temporal Transformer (1 layer) → pooled
+                                                      ↓ Late Fusion (MLP)
+Top-view Video (8 frames) → DINOv2-ViT-B/14 (frozen) + LoRA r=4 → patch features
+                          → Temporal Transformer (1 layer) → pooled
                                                              ↓
-                                       Cross-attention (FPV ↔ Top-view) → [768]
+                                       MLP fusion → 256-dim
                                                              ↓
-                                       Row head (8) + Col head (12) with sigmoid
+                       Row head (8) + Col head (12) + Type head (3-class: single/row/col)
 ```
 
 **Code locations:**
-- `src/models/backbone.py`: `DINOv2Backbone` class, default `use_dinov2=True`
-- `src/models/fusion.py`: `DualViewFusion`, default uses DINOv2 (not VideoMAE)
-- `train.py`: default `--backbone dinov2`
+- `src/models/backbone.py`: `DINOv2Backbone` class — no fallback, raises if weights can't load
+- `src/models/fusion.py`: `DualViewFusion` (returns row, col, type logits) + `WellDetectionLoss`
+- `train.py`: training loop, hybrid checkpoint criterion, type-conditioned val decoder
 
 **VideoMAE Status:** Discussed as a **future/alternative** for stronger temporal modeling, but NOT in the codebase and NOT the primary path.
 
-**ResNet-18 Status:** Deprecated (2015); only present as sandbox fallback due to weight download restrictions. NOT primary. NOT recommended for production.
+**ResNet-18 Status:** Deprecated (2015) and **removed** from the codebase in commit d5b8f04 along with the `use_dinov2` flag and `LegacyResNet18Backbone` class. Retained in `docs/ML_STACK.md` only as comparative justification.
 
 ---
 

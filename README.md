@@ -9,7 +9,7 @@
 
 This project implements an automated well detection system for microplate-based liquid handling. Given synchronized dual-view video (first-person view from the pipette operator + bird's-eye top-view of the plate), the system predicts which of the 96 wells (8 rows × 12 columns, labeled A1–H12) are being dispensed into. The solution supports multi-well predictions (1-channel single wells, 8-channel row operations, 12-channel column operations).
 
-**Recommended Architecture:** Deep Learning End-to-End (PyTorch + DINOv2-ViT-B/14 + LoRA) with temporal transformer, factorized row/column output heads, and focal loss for handling class imbalance. DINOv2 is the ONLY production primary; ResNet-18 fallback is sandbox-only due to proxy constraints. See ML_STACK.md for full justification.
+**Recommended Architecture:** Deep Learning End-to-End (PyTorch + DINOv2-ViT-B/14 + LoRA) with temporal transformer, factorized row/column heads, a 3-class clip-type head (single/row/col), and weighted BCE + well-consistency loss. DINOv2 is the only backbone path; the legacy ResNet-18 fallback was removed in commit d5b8f04. See ML_STACK.md for full justification.
 
 **Expected Performance:** 70–80% exact-match accuracy on held-out validation set (with calibration-first approach prioritizing confidence scores).
 
@@ -25,7 +25,7 @@ This project implements an automated well detection system for microplate-based 
 - **LoRA efficiency** (~33K trainable params) prevents overfitting on N=100 samples; full ResNet-18 fine-tuning would require 11M parameters (catastrophic risk)
 - **Few-shot empirical validation:** DINOv2 ViT-B outperforms ResNet-50 by +8 percentage points on 10-shot benchmarks (Oquab et al., ICCV 2023)
 
-**Sandbox note:** Current training uses ResNet-18 fallback (pretrained weights blocked by proxy). Production deployment should use DINOv2 as specified above. See `src/models/backbone.py` for implementation.
+**Implementation note:** DINOv2-ViT-B/14 weights are downloaded from Hugging Face Hub (timm) at training start. The earlier ResNet-18 fallback path was removed once weight downloads were no longer constrained — see `src/models/backbone.py`.
 
 ---
 
@@ -146,9 +146,8 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
 ### Recommended Technology Stack
 
 **Framework:** PyTorch 2.1+  
-**Primary Backbone:** DINOv2-ViT-B/14 (self-supervised on 142M images, ~86M frozen + ~33K LoRA trainable)  
-**Alternative Backbone:** VideoMAE-Base (for stronger temporal modeling, not yet in codebase)  
-**Sandbox Fallback:** ResNet-18 (random init, proxy constraints only; NOT recommended for production)  
+**Backbone:** DINOv2-ViT-B/14 (self-supervised on 142M images, frozen + LoRA r=4 adapters; ~12.3M trainable params)  
+**Future alternative:** VideoMAE-Base for stronger temporal modeling (not in current codebase)  
 **Temporal Module:** Temporal Transformer (2–4 attention blocks over ordered frames)  
 **Video I/O:** OpenCV (cv2) with temporal-aware frame extraction  
 **Synthetic Data:** 10K+ videos via (a) VideoMAE fine-tuning, (b) 3D Blender simulation  
@@ -179,11 +178,11 @@ See `docs/ARCHITECTURE.md` for detailed comparison and non-negotiable design con
   - Would replace DINOv2 in temporal_backbone role if needed
   - Kinetics-400 pre-training provides excellent video understanding
 
-- **Deprecated: ResNet-18**
-  - Legacy 2015 architecture; now explicitly deprecated
+- **Removed: ResNet-18**
+  - Legacy 2015 architecture; the fallback path was removed in commit d5b8f04
   - Insufficient spatial resolution (7×7 features ≠ 96 wells)
   - Severe overfitting risk on N=100 with full fine-tuning
-  - Sandbox only (weight download restrictions); never use in production
+  - Kept only as comparative justification in `docs/ML_STACK.md`
 
 #### 2. Temporal Modeling: Temporal Transformer (MANDATORY)
 ```
@@ -378,38 +377,39 @@ pip install -r requirements.txt
 ### Running Inference
 
 ```bash
-# Basic usage
+# Basic usage (uses checkpoints/best.pt by default; writes to stdout)
 python inference.py --fpv path/to/fpv.mp4 --topview path/to/topview.mp4 --output result.json
 
-# With custom model and threshold
-python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --model dinov2_vit_b14 --threshold 0.70
+# Use a specific release
+python inference.py --model releases/deployed/model.pt --fpv fpv.mp4 --topview topview.mp4 --output result.json
 
-# With custom image resolution (recommended: img_size=448)
-python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --img_size 448
+# Override the threshold-decoder fallback (default 0.4; primary path is type-conditioned)
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --threshold 0.5
 
-# Disable adaptive thresholding
-python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --no-adaptive
+# Custom image resolution (must be a multiple of 14; 448 recommended)
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --img_size 448
 
 # Verbose output
-python inference.py --fpv fpv.mp4 --topview topview.mp4 --output result.json --verbose
+python inference.py --fpv fpv.mp4 --topview topview.mp4 --verbose
 ```
 
-**Note on image resolution:** img_size=448 is recommended (team discovered 224 insufficient for well discrimination). Use img_size=224 only for memory-constrained deployments.
+**Note on image resolution:** img_size=448 is the project default. DINOv2 ViT-B/14 requires the size to be a multiple of 14 (`snap_to_dinov2_resolution()` enforces this). 224 was tried earlier but proved insufficient for per-well discrimination.
 
 ### Output Format
 
-The script generates JSON output:
+The script generates JSON output matching the challenge submission spec, plus a small metadata block:
 ```json
 {
-  "wells": [
+  "clip_id_FPV": "Plate_5_clip_0003_FPV",
+  "clip_id_Topview": "Plate_5_clip_0003_Topview",
+  "wells_prediction": [
     {"well_row": "A", "well_column": 1},
     {"well_row": "A", "well_column": 2}
   ],
   "metadata": {
-    "inference_time_seconds": 1.23,
-    "confidence_threshold": 0.5,
-    "fpv_frames_analyzed": 150,
-    "topview_frames_analyzed": 150
+    "model": "DINOv2-ViT-B/14+LoRA",
+    "inference_time_s": 1.23,
+    "confident": true
   }
 }
 ```
@@ -447,43 +447,53 @@ python tools/visualizer.py heatmap --input results.json --labels labels.json
 ```
 pipette-well-challenge/
 ├── README.md                           ← This file
-├── .gitignore                          ← Python, video files, models
+├── .gitignore
+├── .gitattributes                      ← Git LFS patterns (model weights, MP4s, synthetic labels)
 ├── requirements.txt                    ← Pinned dependencies
-├── inference.py                        ← CLI entrypoint (fully implemented)
-├── train.py                            ← Training script (fully implemented)
+├── inference.py                        ← Inference CLI
+├── train.py                            ← Training entry point
+├── run_training.sh                     ← Launcher; auto-versions runs as YYYYMMDD.<git-hash>
+├── make_release.py                     ← Package a checkpoint into releases/<version>/
+├── generate_synthetic_data.py          ← FFmpeg-based augmentation pipeline
+├── diagnostic_threshold_sweep.py       ← One-off decoder/threshold diagnostic
 │
 ├── docs/
-│   ├── DATA_ANALYSIS.md                ← Data Scientist's analysis (96 well coverage, class imbalance, view strengths/weaknesses)
-│   ├── ARCHITECTURE.md                 ← Architect's proposals (3 approaches: CV, DL, Hybrid)
-│   ├── ML_STACK.md                     ← ML Scientist's stack recommendation (PyTorch, DINOv2, focal loss details)
-│   ├── QA_STRATEGY.md                  ← QA strategy (testing, edge cases, failure modes, acceptance criteria)
-│   └── TEAM_DECISIONS.md               ← Cross-team decisions log (architecture choice, loss function, evaluation metrics)
+│   ├── ARCHITECTURE.md                 ← Architecture proposals + comparison
+│   ├── ARCHITECURE_DIAGRAM.md          ← Diagram supplement (note: filename has historical typo)
+│   ├── DATA_ANALYSIS.md                ← Pre-analysis predictions and strategy
+│   ├── DATA_ANALYSIS_EMPIRICAL.md      ← Real findings from the actual dataset
+│   ├── DESIGN_VISUALIZATION_TOOL.md    ← Visualizer spec
+│   ├── FEATURE_SCENE_CLASSIFICATION.md ← Future feature proposal
+│   ├── ML_STACK.md                     ← Stack rationale (PyTorch, DINOv2, loss, training)
+│   ├── QA_STRATEGY.md                  ← Test strategy
+│   ├── QA_REPORT.md                    ← QA snapshot (historical)
+│   ├── TRAINING_REPORT_v8.md           ← Training analysis snapshot (historical)
+│   └── TEAM_DECISIONS.md               ← Cross-team decisions log
 │
 ├── src/
-│   ├── __init__.py
-│   ├── preprocessing/
-│   │   ├── __init__.py
-│   │   └── video_loader.py             ← Frame extraction, FPV+top-view synchronization
+│   ├── preprocessing/video_loader.py   ← Frame extraction, dual-view alignment, temporal jitter
 │   ├── models/
-│   │   ├── __init__.py
-│   │   ├── backbone.py                 ← DINOv2/ResNet-18 backbone definition
-│   │   └── fusion.py                   ← Dual-view feature fusion logic
-│   ├── postprocessing/
-│   │   ├── __init__.py
-│   │   └── output_formatter.py         ← Convert logits to JSON well predictions
-│   └── utils/
-│       ├── __init__.py
-│       └── metrics.py                  ← Evaluation metrics (per-well accuracy, cardinality accuracy, etc.)
+│   │   ├── backbone.py                 ← DINOv2-ViT-B/14 + LoRA backbone
+│   │   └── fusion.py                   ← Dual-view fusion + row/col/type heads + WellDetectionLoss
+│   ├── postprocessing/output_formatter.py
+│   │     ← logits_to_wells (threshold), logits_to_wells_typed (PRIMARY decoder),
+│   │       logits_to_wells_adaptive (alternative)
+│   └── utils/metrics.py                ← exact_match, jaccard_similarity, cardinality_accuracy
 │
-├── tools/
-│   └── visualizer.py                   ← Visualization & analysis CLI (render, rank, annotate, heatmap)
+├── releases/                           ← Versioned model releases (see releases/README.md)
+│   ├── README.md
+│   ├── index.json                      ← Registry of all releases with metrics
+│   ├── latest    -> <version>          ← Symlink to most recently packaged release
+│   ├── deployed  -> <version>          ← Symlink to validated production release
+│   └── YYYYMMDD.<hash>/                ← Each release: model.pt (LFS) + config.json + RELEASE_NOTES.md
 │
-├── tests/
-│   ├── test_output_schema.py           ← JSON schema validation (wells array, row/column ranges, etc.)
-│   └── test_preprocessing.py           ← Frame extraction, synchronization tests
-│
-└── configs/
-    └── default.yaml                    ← Default configuration (frame sampling, thresholds, model paths)
+├── checkpoints/                        ← Live training checkpoints (gitignored apart from LFS .pt)
+├── training_results/                   ← Per-run training_<version>.log files
+├── data/pipette_well_dataset/          ← Real + synthetic clip pairs + labels.json
+├── tools/visualizer.py                 ← Visualization & analysis CLI
+├── tests/                              ← test_models, test_output_schema, test_preprocessing,
+│                                          test_training_setup, test_overfit_smoke (currently skipped)
+└── configs/default.yaml
 ```
 
 ---
@@ -504,9 +514,9 @@ pipette-well-challenge/
 
 ### For ML Scientists
 - **START HERE:** `docs/ML_STACK.md`
-- Covers: Framework selection (PyTorch), backbone (DINOv2-ViT-B/14 + LoRA for production; ResNet-18 for sandbox), loss function (focal loss with α=0.75), training strategy
+- Covers: Framework (PyTorch), backbone (DINOv2-ViT-B/14 + LoRA), loss (weighted BCE with α=0.75 + well-consistency), training strategy
 - Includes: Code examples, hyperparameter tuning, mixed precision training, inference SLA validation
-- Key: See "Why Not ResNet" section for detailed architectural justification
+- See "Why Not ResNet" section for the historical comparative justification (ResNet-18 was rejected and removed)
 
 ### For QA Engineers
 - **START HERE:** `docs/QA_STRATEGY.md`
@@ -529,39 +539,56 @@ pipette-well-challenge/
 
 ## Model Training
 
-The training pipeline is fully implemented in `train.py` and is currently in progress. The implementation includes:
+### Launching a run
 
-**Backbone Selection:**
-The sandbox environment uses ResNet-18 from random initialization due to proxy restrictions preventing DINOv2/VideoMAE weight downloads. In production, use DINOv2-ViT-B/14 + LoRA fine-tuning as specified in `docs/ML_STACK.md` for spatial grounding. See ML_STACK.md "Why Not ResNet" section for detailed justification.
+```bash
+# Real-only labels, auto-versioned, resumes from checkpoints/best.pt if present
+USE_COMBINED=0 bash run_training.sh
 
-**Implemented Components:**
+# Use combined real + synthetic labels (NOTE: random val split currently leaks
+# synthetic augmentations of training clips into val; clean split is on the v11 roadmap)
+USE_COMBINED=1 bash run_training.sh
 
-1. **`src/models/backbone.py`:**
-   - For sandbox: Loads ResNet-18 from torchvision (random initialization)
-   - For production: Use DINOv2-ViT-B/14 with LoRA adapters
-   - Early layers frozen initially, layer2+ unfrozen for fine-tuning
+# Force GPU
+DEVICE=cuda:0 bash run_training.sh
+```
 
-2. **`src/models/fusion.py`:**
-   - Concatenates FPV and top-view features
-   - Passes through FC layers
-   - Outputs row and column logits
+`run_training.sh` auto-computes `TRAINING_VERS` from `date -u +%Y%m%d.<git-hash>` and writes the log to `training_results/training_<version>.log`. Override with `TRAINING_VERS=custom`.
 
-3. **Training loop (`train.py`):**
-   - Data loading and augmentation (albumentations)
-   - Focal loss computation (γ=2.0, α=0.75)
-   - Validation on held-out set
-   - Early stopping with best checkpoint tracking
+### Architecture
 
-4. **Inference pipeline (`inference.py`):**
-   - Frame extraction from dual videos
-   - Temporal synchronization
-   - Model forward pass
-   - Post-processing (threshold, cardinality constraints)
+- **Backbone:** DINOv2-ViT-B/14 frozen + LoRA (rank=4) — ~12.3M trainable params
+- **Temporal:** 1-layer transformer over 8 sampled frames (per view)
+- **Fusion:** Late, MLP-based; FPV and Top-view processed independently
+- **Heads:** factorized row (8) + column (12) + 3-class clip-type (single/row/col)
+- **Loss:** weighted BCE (focal_gamma=0, alpha=0.75) on row/col + cross-entropy on type + well-consistency loss (outer product, rectangular-pattern mask)
 
-**Training Status:**
-DINOv2 + LoRA training is in progress. Current focus: optimizing temporal fusion and calibration metrics (ECE < 0.10). Synthetic data generation (Blender + VideoMAE) is scheduled for next phase.
+### Validation decoder (commit 3af379f)
 
-See `ML_STACK.md` for detailed pseudocode and implementation notes.
+Validation uses the **type-conditioned decoder** `logits_to_wells_typed`: the type head's argmax picks the strategy (single → top-1 row × top-1 col; row → top-1 row × all 12 cols; col → all 8 rows × top-1 col). Threshold-based metrics (`jaccard_thresh`, `exact_match_thresh`) are still logged as a diagnostic so we can see when the spatial heads strengthen enough that thresholding becomes viable.
+
+### Checkpoint criterion
+
+Hybrid: save when **either** Jaccard improves **or** val_loss improves. Patience resets on either improvement. This avoids early-stopping while val_loss is still falling but Jaccard is noisy on a 20-sample val set.
+
+### Synthetic data
+
+`generate_synthetic_data.py` produces 700 augmented clip pairs from the 100 real clips using ffmpeg (4 photometric: bright/dark/noise/contrast; 3 geometric flips with corresponding label remapping). Output: `data/pipette_well_dataset/labels_synthetic.json` (700) + `labels_combined.json` (800). Use with `USE_COMBINED=1`.
+
+### Releasing a trained model
+
+```bash
+# Package the current best.pt as releases/YYYYMMDD.<git-hash>/
+python make_release.py --notes "Jaccard 0.42 after 40 epochs"
+
+# Package and immediately mark as deployed (the validated production model)
+python make_release.py --notes "..." --deploy
+
+# Promote an already-packaged release to deployed without re-packaging
+python make_release.py --deploy-only 20260512.a3f91bc
+```
+
+See `releases/README.md` for the full versioning + deployment scheme. Weight files live under Git LFS.
 
 ---
 
@@ -577,6 +604,9 @@ pytest tests/ -v
 **Test Coverage:**
 - `test_output_schema.py`: Validates JSON output structure (wells array, row/column ranges, required fields)
 - `test_preprocessing.py`: Video loading, frame extraction, temporal alignment
+- `test_models.py`: Backbone + fusion module shape/forward checks
+- `test_training_setup.py`: Trainer construction and config plumbing
+- `test_overfit_smoke.py`: Memorisation smoke test (currently skipped — needs rewrite for the 3-output model + DINOv2 CPU runtime)
 
 ### Edge Cases Covered
 
@@ -660,5 +690,5 @@ This project is part of the Transfyr AI challenge (April 2026). Developed by a c
 
 ---
 
-**Last Updated:** April 16, 2026  
-**Status:** Implementation complete; DINOv2 + LoRA training in progress
+**Last Updated:** April 25, 2026  
+**Status:** DINOv2 + LoRA training in progress; type-conditioned decoder + train metrics landed (commit 3af379f); first versioned release packaged (`releases/20260425.edb3173`)
