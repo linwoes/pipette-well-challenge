@@ -15,14 +15,21 @@
 #   v8:  Clip-type head: 3-class (single/row/col) + type_loss_weight=1.0.
 #        Architecture change — cannot resume from v7; fresh training from DINOv2.
 #   v9:  Fix 3: val decoder → threshold=0.4. Fix 4: checkpoint on Jaccard. Fix 5: NUM_FRAMES 4→8.
-#   v10: Hybrid checkpoint criterion (Jaccard OR val_loss). Temporal jitter. Resumes from v9/epoch-5.
+#   v10: Hybrid checkpoint criterion (Jaccard OR val_loss). Temporal jitter. Type-conditioned val
+#        decoder + train metrics. Diagnosis: 70% train Jaccard but ~0% val Jaccard — overfitting.
+#   v11: Leak-free synthetic split (real-only val, real+synth-of-train for train). Val no longer
+#        augmented (was previously sharing the augment=True parent dataset). Removed broken
+#        HorizontalFlip aug that flipped images without remapping col labels. Added MotionBlur
+#        and ImageCompression augs. Effective dataset: 80 train_real + 560 train_synth + 20 val_real.
+#        Fresh start (no resume) — augmented data manifold differs from v10 epoch-39 weights.
 #
 # Usage:
 #   bash run_training.sh                      # auto-versioned, real labels only
-#   USE_COMBINED=1 bash run_training.sh       # use combined real+synthetic labels
+#   USE_SYNTHETIC=1 bash run_training.sh      # use leak-free real+synthetic split (v11+ default)
 #   DATA_DIR=/my/data bash run_training.sh    # override data path
 #   DEVICE=cuda:0 bash run_training.sh        # force GPU
 #   TRAINING_VERS=custom bash run_training.sh # override auto-version
+#   RESUME=  bash run_training.sh             # train from scratch (empty RESUME)
 
 set -euo pipefail
 
@@ -80,21 +87,21 @@ echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
 echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
 echo "  RESUME         : ${RESUME:-none}"
 
-# Auto-use combined labels unless USE_COMBINED=0 is set
-# Set USE_COMBINED=0 to force real-only labels (clean val set, no leakage)
-EFFECTIVE_LABELS="${LABELS}"
-COMBINED_LABELS="${DATA_DIR}/labels_combined.json"
-USE_COMBINED="${USE_COMBINED:-1}"
-if [ "${USE_COMBINED}" = "1" ] && [ -f "${COMBINED_LABELS}" ]; then
-    EFFECTIVE_LABELS="${COMBINED_LABELS}"
-    echo "  LABELS (combined): ${EFFECTIVE_LABELS}"
+# Synthetic data uses a leak-free split (real-only val, real+synth-of-train).
+# Set USE_SYNTHETIC=1 (default) to enable; USE_SYNTHETIC=0 forces real-only training.
+SYNTHETIC_LABELS_PATH="${DATA_DIR}/labels_synthetic.json"
+USE_SYNTHETIC="${USE_SYNTHETIC:-1}"
+SYNTHETIC_ARG=""
+if [ "${USE_SYNTHETIC}" = "1" ] && [ -f "${SYNTHETIC_LABELS_PATH}" ]; then
+    SYNTHETIC_ARG="--synthetic_labels ${SYNTHETIC_LABELS_PATH}"
+    echo "  SYNTHETIC      : ${SYNTHETIC_LABELS_PATH} (leak-free split: real val, real+synth train)"
 else
-    echo "  LABELS (real only): ${EFFECTIVE_LABELS}"
+    echo "  SYNTHETIC      : disabled (real-only)"
 fi
 
 "${PYTHON}" "${REPO_ROOT}/train.py" \
   --data_dir                "${DATA_DIR}" \
-  --labels                  "${EFFECTIVE_LABELS}" \
+  --labels                  "${LABELS}" \
   --epochs                  "${EPOCHS}" \
   --batch_size              "${BATCH_SIZE}" \
   --num_frames              "${NUM_FRAMES}" \
@@ -109,5 +116,6 @@ fi
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
   --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
+  ${SYNTHETIC_ARG} \
   ${RESUME:+--resume "${RESUME}"} \
   2>&1 | tee "${TRAINING_OUTPUT_DIR}/training_${TRAINING_VERS}.log"

@@ -91,16 +91,20 @@ class PipetteWellDataset(Dataset):
       ]
     """
 
-    def __init__(self, data_dir: str, labels_path: str, num_frames: int = 8, img_size: int = 224, augment: bool = False):
+    def __init__(self, data_dir: str, labels: "list | str", num_frames: int = 8, img_size: int = 224, augment: bool = False):
         """
         Initialize dataset.
 
         Args:
             data_dir: Path to directory containing videos
-            labels_path: Path to JSON labels file
+            labels: Either an in-memory list of label dicts (preferred — lets the
+                caller perform a leak-free train/val split) or a path string,
+                kept for backward compatibility with single-file callers.
             num_frames: Number of frames to sample per video (default 8)
             img_size: Target image size (default 224)
-            augment: Enable augmentation (default False)
+            augment: Enable training-time augmentation. MUST be False for the
+                validation set — the same parent dataset cannot be shared
+                between train and val with different augmentation states.
         """
         self.data_dir = Path(data_dir)
         self.num_frames = num_frames
@@ -114,24 +118,31 @@ class PipetteWellDataset(Dataset):
             logger.warning(f"img_size={img_size} → snapped to {snapped} for DINOv2 alignment")
             self.img_size = snapped
 
-        # Load labels
-        with open(labels_path, 'r') as f:
-            self.labels = json.load(f)
+        # Accept either an in-memory list or a path to a labels JSON
+        if isinstance(labels, (str, Path)):
+            with open(labels, 'r') as f:
+                self.labels = json.load(f)
+            self._validate_labels(self.labels, str(labels))
+        else:
+            self.labels = list(labels)
+            self._validate_labels(self.labels, '<in-memory>')
 
-        logger.info(f"Loaded {len(self.labels)} labels")
+        logger.info(f"Dataset built: {len(self.labels)} clips  (augment={self.augment})")
 
-        # T-3: Validate label schema at load time. Fail fast rather than
-        # discovering malformed entries as cryptic errors mid-training.
-        self._validate_labels(self.labels, labels_path)
-
-        # Build augmentation pipeline (only if albumentations available)
+        # Build augmentation pipeline. Geometric augmentations that change the
+        # row/column layout (horizontal/vertical flip, large rotation) are NOT
+        # used here — they would invalidate the row/col labels. The synthetic
+        # data generator handles flips with proper label remapping; here we
+        # only do photometric perturbations + a mild scale crop that keeps the
+        # plate fully in-frame.
         if self.augment:
             self.transform = A.Compose([
-                A.RandomResizedCrop(size=(img_size, img_size), scale=(0.8, 1.0)),
-                A.HorizontalFlip(p=0.3),
-                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, p=0.5),
+                A.RandomResizedCrop(size=(img_size, img_size), scale=(0.85, 1.0)),
+                A.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.15, hue=0.02, p=0.6),
                 A.GaussianBlur(blur_limit=(3, 5), p=0.2),
+                A.MotionBlur(blur_limit=5, p=0.15),
                 A.GaussNoise(p=0.2),
+                A.ImageCompression(quality_range=(70, 100), p=0.2),
                 A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                 ToTensorV2(),
             ], is_check_shapes=False)
@@ -337,6 +348,125 @@ class PipetteWellDataset(Dataset):
             )
 
         logger.info(f"Label validation passed: {len(labels)} entries, {len(seen_pairs)} unique clips")
+
+
+def build_leak_free_split(
+    real_labels: List[Dict],
+    synthetic_labels: List[Dict],
+    val_split: float,
+    seed: int,
+) -> Tuple[List[Dict], List[Dict]]:
+    """
+    Build train/val label lists that guarantee no synthetic-derived data
+    leaks into the validation set.
+
+    Procedure:
+      1. Deterministically shuffle the real clips and split into val_real
+         (val_split fraction) and train_real (remainder).
+      2. Build train_synth by selecting synthetic entries whose source_fpv
+         is in train_real_ids. Synthetic entries derived from val_real
+         clips are EXCLUDED entirely — including them anywhere would
+         compromise val independence.
+      3. train = train_real + train_synth ; val = val_real (real only).
+
+    The function asserts the no-leakage property before returning, so a
+    misconfigured synthetic file fails fast rather than silently
+    corrupting validation metrics.
+
+    Args:
+        real_labels: list of real clip label dicts (no 'synthetic' field)
+        synthetic_labels: list of synthetic clip label dicts; each must
+            have 'synthetic': True and 'source_fpv' pointing to the real
+            clip it was derived from.
+        val_split: fraction of real clips to hold out for validation
+        seed: deterministic shuffle seed
+
+    Returns:
+        (train_labels, val_labels)
+    """
+    rng = np.random.default_rng(seed)
+    real_sorted = sorted(real_labels, key=lambda r: r['clip_id_FPV'])
+    indices = rng.permutation(len(real_sorted))
+    n_val = max(1, int(round(len(real_sorted) * val_split)))
+    val_idx = set(indices[:n_val].tolist())
+
+    val_real = [real_sorted[i] for i in range(len(real_sorted)) if i in val_idx]
+    train_real = [real_sorted[i] for i in range(len(real_sorted)) if i not in val_idx]
+
+    train_real_ids = {r['clip_id_FPV'] for r in train_real}
+    val_real_ids = {r['clip_id_FPV'] for r in val_real}
+
+    train_synth = [
+        s for s in synthetic_labels
+        if s.get('source_fpv') in train_real_ids
+    ]
+
+    # Discarded synthetic entries are derived from val clips — they MUST NOT
+    # appear in either split. Track for logging.
+    n_synth_dropped = sum(1 for s in synthetic_labels if s.get('source_fpv') in val_real_ids)
+    n_synth_orphan = len(synthetic_labels) - len(train_synth) - n_synth_dropped
+
+    train_labels = train_real + train_synth
+    val_labels = val_real
+
+    _assert_no_synthetic_leakage(train_labels, val_labels)
+
+    logger.info(
+        f"Leak-free split: real={len(real_sorted)}  val_real={len(val_real)}  "
+        f"train_real={len(train_real)}  train_synth={len(train_synth)}  "
+        f"dropped_val_synth={n_synth_dropped}  orphan_synth={n_synth_orphan}"
+    )
+    logger.info(f"Train total: {len(train_labels)}  |  Val total: {len(val_labels)}  (real-only)")
+
+    return train_labels, val_labels
+
+
+def _assert_no_synthetic_leakage(train_labels: List[Dict], val_labels: List[Dict]) -> None:
+    """
+    Hard checks that guarantee val independence. Raises AssertionError on
+    any violation. These run on every training launch; the cost is trivial
+    and the cost of a silent leak is enormous (overstated val metrics →
+    decisions made on bad data).
+
+    Checks:
+      1. Every val entry is real (no 'synthetic' flag set to True).
+      2. No val clip_id appears in train (under any name).
+      3. No train synthetic entry's source_fpv matches a val real clip_id
+         — i.e., we never train on an augmentation of a val clip.
+      4. clip_id_FPV pairs are unique across train+val (no duplicates).
+    """
+    val_ids = {v['clip_id_FPV'] for v in val_labels}
+
+    # 1. Val is real-only
+    val_synth = [v for v in val_labels if v.get('synthetic')]
+    assert not val_synth, (
+        f"Validation set contains {len(val_synth)} synthetic entries. "
+        f"Val must be real-only. First offender: {val_synth[0].get('clip_id_FPV')}"
+    )
+
+    # 2. No clip_id overlap between train and val
+    train_ids = {t['clip_id_FPV'] for t in train_labels}
+    overlap = train_ids & val_ids
+    assert not overlap, (
+        f"clip_id overlap between train and val: {sorted(overlap)[:5]}"
+    )
+
+    # 3. No train synthetic derived from a val clip
+    leaked = [
+        t for t in train_labels
+        if t.get('synthetic') and t.get('source_fpv') in val_ids
+    ]
+    assert not leaked, (
+        f"{len(leaked)} train synthetic entries derived from val clips. "
+        f"First offender: {leaked[0]['clip_id_FPV']} (source_fpv={leaked[0]['source_fpv']})"
+    )
+
+    # 4. No duplicate clip_id across the union
+    all_ids = [t['clip_id_FPV'] for t in train_labels] + [v['clip_id_FPV'] for v in val_labels]
+    if len(all_ids) != len(set(all_ids)):
+        from collections import Counter
+        dups = [c for c, n in Counter(all_ids).items() if n > 1]
+        raise AssertionError(f"Duplicate clip_ids in split: {dups[:5]}")
 
 
 class Trainer:
@@ -660,6 +790,10 @@ def main():
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--resume', type=str, default=None,
                         help='Path to checkpoint to resume training from')
+    parser.add_argument('--synthetic_labels', type=str, default=None,
+                        help='Path to synthetic labels JSON. When set, training '
+                             'uses real+synthetic-of-train clips while val stays '
+                             'real-only (leak-free split, asserted at startup).')
 
     args = parser.parse_args()
 
@@ -670,23 +804,48 @@ def main():
     device = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f"Device: {device}")
 
-    # Load dataset
-    logger.info("Loading dataset...")
-    dataset = PipetteWellDataset(
-        args.data_dir,
-        args.labels,
-        num_frames=args.num_frames,
-        img_size=args.img_size,
-        augment=True
+    # Load and split labels.
+    # Two paths:
+    #   (a) --synthetic_labels not set → real-only mode: random train/val
+    #       split on the real label list (legacy behavior).
+    #   (b) --synthetic_labels set → leak-free mode: val is held-out real
+    #       clips only, train is the remaining real clips PLUS every
+    #       synthetic clip whose source_fpv is a train real clip. The
+    #       split is asserted leak-free before any training begins.
+    logger.info("Loading labels...")
+    with open(args.labels, 'r') as f:
+        real_labels = json.load(f)
+    logger.info(f"Loaded {len(real_labels)} real labels from {args.labels}")
+
+    if args.synthetic_labels:
+        with open(args.synthetic_labels, 'r') as f:
+            synthetic_labels = json.load(f)
+        logger.info(f"Loaded {len(synthetic_labels)} synthetic labels from {args.synthetic_labels}")
+        train_labels, val_labels = build_leak_free_split(
+            real_labels, synthetic_labels,
+            val_split=args.val_split, seed=args.seed,
+        )
+    else:
+        rng = np.random.default_rng(args.seed)
+        real_sorted = sorted(real_labels, key=lambda r: r['clip_id_FPV'])
+        idx = rng.permutation(len(real_sorted))
+        n_val = max(1, int(round(len(real_sorted) * args.val_split)))
+        val_set = set(idx[:n_val].tolist())
+        train_labels = [real_sorted[i] for i in range(len(real_sorted)) if i not in val_set]
+        val_labels = [real_sorted[i] for i in range(len(real_sorted)) if i in val_set]
+        logger.info(f"Real-only split: train={len(train_labels)}  val={len(val_labels)}  (no synthetic data)")
+
+    # Build separate datasets so val NEVER sees augmentation. (The previous
+    # code shared a single augment=True dataset across both via random_split,
+    # which silently augmented val data — including a HorizontalFlip that
+    # corrupted col labels.)
+    train_dataset = PipetteWellDataset(
+        args.data_dir, train_labels,
+        num_frames=args.num_frames, img_size=args.img_size, augment=True,
     )
-
-    # Split into train/val
-    n_val = int(len(dataset) * args.val_split)
-    n_train = len(dataset) - n_val
-
-    train_dataset, val_dataset = torch.utils.data.random_split(
-        dataset, [n_train, n_val],
-        generator=torch.Generator().manual_seed(args.seed)
+    val_dataset = PipetteWellDataset(
+        args.data_dir, val_labels,
+        num_frames=args.num_frames, img_size=args.img_size, augment=False,
     )
 
     logger.info(f"Train size: {len(train_dataset)}, Val size: {len(val_dataset)}")
