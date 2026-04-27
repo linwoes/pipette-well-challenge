@@ -170,27 +170,20 @@ class DINOv2Backbone(nn.Module):
 
     def _load_dinov2(self, img_size: int = 224) -> Optional[nn.Module]:
         """
-        Load DINOv2-ViT-B/14 from torch.hub or timm.
+        Load DINOv2-ViT-B/14, preferring timm over torch.hub.
 
-        img_size is passed to timm so positional embeddings are initialised
-        at the correct resolution (timm defaults to 518 otherwise).
+        Why timm first: timm's `vit_base_patch14_dinov2` accepts img_size at
+        construction time, so position embeddings are built at the target
+        resolution and forward returns a plain (B, N+1, D) tensor. The
+        torch.hub variant is built at 224×224 and interpolates pos-embeds
+        on every forward pass, plus its forward_features returns a dict
+        with key 'x_norm_clstoken' that downstream code has to handle.
+        Both work but timm is faster and simpler.
 
         Returns:
-            Loaded model or None if both fail.
+            Loaded model or None if both backends fail.
         """
-        # Try torch.hub first (requires Python 3.10+ for type-union syntax in hub code)
-        try:
-            model = torch.hub.load(
-                'facebookresearch/dinov2',
-                'dinov2_vitb14',
-                pretrained=True
-            )
-            _logger.info("Loaded DINOv2 via torch.hub")
-            return model
-        except Exception as e:
-            warnings.warn(f"torch.hub load failed: {e}. Trying timm fallback...")
-
-        # Fallback to timm — pass img_size so the model is built for our resolution
+        # Prefer timm — img_size baked in at construction
         try:
             import timm
             model = timm.create_model(
@@ -201,7 +194,20 @@ class DINOv2Backbone(nn.Module):
             _logger.info(f"Loaded DINOv2 via timm (img_size={img_size})")
             return model
         except Exception as e:
-            warnings.warn(f"timm fallback failed: {e}.")
+            warnings.warn(f"timm load failed: {e}. Trying torch.hub fallback...")
+
+        # Fallback to torch.hub (always built at 224×224; pos-embeds get
+        # interpolated each forward pass for non-224 inputs).
+        try:
+            model = torch.hub.load(
+                'facebookresearch/dinov2',
+                'dinov2_vitb14',
+                pretrained=True
+            )
+            _logger.info("Loaded DINOv2 via torch.hub (pos-embeds will be interpolated for non-224 inputs)")
+            return model
+        except Exception as e:
+            warnings.warn(f"torch.hub fallback failed: {e}.")
             return None
 
     def _inject_lora_adapters(self):
@@ -321,22 +327,38 @@ class DINOv2Backbone(nn.Module):
         """
         validate_dinov2_input(x)
 
-        # Standard DINOv2 forward: extract CLS token (index 0)
-        # DINOv2 returns shape (B, num_patches + 1, 768) where index 0 is CLS
+        # Two DINOv2 backends produce different forward_features outputs:
+        #   timm:      Tensor (B, N+1, D)  with CLS at index 0
+        #   torch.hub: dict   {'x_norm_clstoken': (B, D), 'x_norm_patchtokens': (B, N, D), ...}
+        # Both return the same CLS embedding semantically — we just need
+        # to extract it consistently.
         if hasattr(self.model, 'forward_features'):
             x = self.model.forward_features(x)
         else:
             x = self.model(x)
 
-        # Extract CLS token (first token)
-        if isinstance(x, torch.Tensor):
-            if x.dim() == 3:  # (B, N, D)
-                cls_token = x[:, 0, :]
-            else:  # (B, D) - already pooled
-                cls_token = x
+        if isinstance(x, dict):
+            # torch.hub path. Try the official DINOv2 key first, then
+            # fallbacks for older or alternative versions.
+            for key in ('x_norm_clstoken', 'cls_token', 'last_hidden_state'):
+                if key in x:
+                    cls_token = x[key]
+                    break
+            else:
+                raise KeyError(
+                    f"DINOv2 forward_features returned dict with unexpected keys: "
+                    f"{list(x.keys())}. Expected 'x_norm_clstoken' (DINOv2 official) "
+                    f"or 'cls_token'."
+                )
+            # The CLS-token entry is already pooled (B, D); patch-token entries
+            # are (B, N, D) and would need x[:, 0] but we don't use those.
+            if cls_token.dim() == 3:
+                cls_token = cls_token[:, 0, :]
+        elif isinstance(x, torch.Tensor):
+            # timm path: (B, N+1, D) sequence or (B, D) if a head pooled it.
+            cls_token = x[:, 0, :] if x.dim() == 3 else x
         else:
-            # Handle dict output if model returns dict
-            cls_token = x['cls_token'] if isinstance(x, dict) else x[:, 0, :]
+            raise TypeError(f"Unexpected DINOv2 output type: {type(x).__name__}")
 
         return cls_token
 
