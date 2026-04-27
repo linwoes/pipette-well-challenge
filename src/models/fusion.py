@@ -372,39 +372,45 @@ class WellDetectionLoss(nn.Module):
         # wells not in ground truth, producing incorrect supervision.
         # Per-sample mask ensures the loss is skipped for non-rectangular GT.
         if self.well_consistency_weight > 0:
-            row_probs = torch.sigmoid(row_logits)   # (B, 8)
-            col_probs = torch.sigmoid(col_logits)   # (B, 12)
+            # Disable autocast: pred_wells is an outer product of two sigmoid
+            # outputs (a probability, not a logit), so we can't use the
+            # autocast-safe BCE-with-logits variant. Compute in fp32 to avoid
+            # the "binary_cross_entropy is unsafe to autocast" runtime error.
+            with torch.cuda.amp.autocast(enabled=False):
+                row_probs = torch.sigmoid(row_logits.float())   # (B, 8)
+                col_probs = torch.sigmoid(col_logits.float())   # (B, 12)
 
-            # Predicted well probabilities: P(well_ij) = P(row_i) * P(col_j)
-            pred_wells = torch.bmm(
-                row_probs.unsqueeze(2),   # (B, 8, 1)
-                col_probs.unsqueeze(1),   # (B, 1, 12)
-            )  # (B, 8, 12)
+                # Predicted well probabilities: P(well_ij) = P(row_i) * P(col_j)
+                pred_wells = torch.bmm(
+                    row_probs.unsqueeze(2),   # (B, 8, 1)
+                    col_probs.unsqueeze(1),   # (B, 1, 12)
+                )  # (B, 8, 12)
 
-            # Ground truth well grid: GT(well_ij) = GT(row_i) * GT(col_j)
-            gt_cart = torch.bmm(
-                row_targets.unsqueeze(2).float(),  # (B, 8, 1)
-                col_targets.unsqueeze(1).float(),  # (B, 1, 12)
-            )  # (B, 8, 12) — Cartesian product of row/col marginals
+                # Ground truth well grid: GT(well_ij) = GT(row_i) * GT(col_j)
+                gt_cart = torch.bmm(
+                    row_targets.unsqueeze(2).float(),  # (B, 8, 1)
+                    col_targets.unsqueeze(1).float(),  # (B, 1, 12)
+                )  # (B, 8, 12) — Cartesian product of row/col marginals
 
-            # Without per-well GT we can't verify rectangularity directly. For
-            # this dataset all GT patterns are single (1×1), full-row (1×12),
-            # or full-col (8×1), all of which satisfy active_rows<=1 OR
-            # active_cols<=1 — so the Cartesian product exactly equals GT and
-            # the consistency loss is valid. Multi-row × multi-col scatter
-            # patterns would generate phantom wells, so we skip them.
-            active_rows = row_targets.sum(dim=1)      # (B,)
-            active_cols = col_targets.sum(dim=1)      # (B,)
-            is_safe = (active_rows <= 1) | (active_cols <= 1)
+                # Without per-well GT we can't verify rectangularity directly. For
+                # this dataset all GT patterns are single (1×1), full-row (1×12),
+                # or full-col (8×1), all of which satisfy active_rows<=1 OR
+                # active_cols<=1 — so the Cartesian product exactly equals GT and
+                # the consistency loss is valid. Multi-row × multi-col scatter
+                # patterns would generate phantom wells, so we skip them.
+                active_rows = row_targets.sum(dim=1)      # (B,)
+                active_cols = col_targets.sum(dim=1)      # (B,)
+                is_safe = (active_rows <= 1) | (active_cols <= 1)
 
-            if is_safe.any():
-                # Only compute loss over safe (rectangular) samples
-                safe_mask = is_safe.float()  # (B,)
-                well_loss_per_sample = F.binary_cross_entropy(
-                    pred_wells, gt_cart, reduction='none'
-                ).mean(dim=(1, 2))  # (B,)
-                well_loss = (safe_mask * well_loss_per_sample).sum() / (safe_mask.sum() + 1e-8)
-                total_loss = total_loss + self.well_consistency_weight * well_loss
+                if is_safe.any():
+                    safe_mask = is_safe.float()  # (B,)
+                    # Clamp to avoid log(0) — pred_wells can hit 0 or 1 with fp32 sigmoids.
+                    pred_wells = pred_wells.clamp(min=1e-7, max=1.0 - 1e-7)
+                    well_loss_per_sample = F.binary_cross_entropy(
+                        pred_wells, gt_cart, reduction='none'
+                    ).mean(dim=(1, 2))  # (B,)
+                    well_loss = (safe_mask * well_loss_per_sample).sum() / (safe_mask.sum() + 1e-8)
+                    total_loss = total_loss + self.well_consistency_weight * well_loss
 
         return total_loss
 
