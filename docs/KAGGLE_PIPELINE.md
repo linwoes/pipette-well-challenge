@@ -130,6 +130,7 @@ KAGGLE_CHECKPOINT_SLUG    # default: pipette-well-checkpoint (empty = no resume)
 
 ## Common failure modes
 
+- **`AcceleratorError: CUDA error: no kernel image is available for execution on the device`** — Kaggle assigned a **P100 GPU** (compute capability sm_60), but the default PyTorch image is compiled for sm_70+. **Fix**: open the kernel on the Kaggle UI → Settings panel on the right → Accelerator → switch to **GPU T4 x2** → re-run all cells. The notebook's smoke test 1 now detects this case and aborts with the same instruction before training starts.
 - **"Kaggle credentials not found"** — `~/.kaggle/kaggle.json` missing or wrong perms. `chmod 600` it.
 - **"Dataset not found"** during notebook run — the notebook auto-detects datasets by walking `/kaggle/input/`, but you must attach them in the Kaggle UI: *Notebook → Add data → Your Datasets*. Once attached, `notebooks/kaggle_train.ipynb` finds them automatically.
 - **Smoke tests fail before training starts** — that's the point. Read which test failed; fix locally; push to GitHub; the Action redeploys; re-run on Kaggle.
