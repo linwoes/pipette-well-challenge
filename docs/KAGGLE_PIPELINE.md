@@ -57,34 +57,51 @@ bash scripts/kaggle_push_data.sh
 
 Creates `<your-username>/pipette-well-dataset` on Kaggle. Re-run only when the dataset changes (e.g. after re-running `generate_synthetic_data.py`).
 
+## ⚠️ Important: Kaggle CLI does not preserve accelerator type
+
+The Kaggle SaveKernel API exposes only `enable_gpu=true/false` — there is no field for "GPU T4 x2" vs "GPU P100". Every time you call `kaggle kernels push`, Kaggle resets the kernel back to whatever GPU your account defaults to. If your default is P100 (sm_60), every CLI-triggered run will fail the smoke-test arch check until you manually re-select T4 in the UI.
+
+**The robust workaround:** the Kaggle notebook is a thin runner — it does `git clone` + `git pull` at startup, then runs `bash run_training.sh`. So once the kernel exists on Kaggle and is wired to your datasets, every subsequent code change flows in automatically through GitHub. You don't need to re-push the kernel for code changes.
+
+```
+                  CLI push        runtime git pull
+local edit ────► (one time, ────► GitHub ───────► Kaggle kernel
+                  for setup)                     (UI run, T4 preserved)
+```
+
 ## Day-to-day use
 
-### Standard loop (laptop)
+### Standard loop (after initial setup is done)
 
 ```bash
 # 1. Make code changes locally
 git add ... && git commit -m '...' && git push
 
-# 2. Push the notebook + queue a run (single command)
-bash scripts/kaggle_run.sh
-```
+# 2. Run on Kaggle from the UI
+#    Open https://www.kaggle.com/code/<you>/pipette-well-training
+#    Save Version → Save & Run All
+#    The kernel git-pulls and uses your T4 setting.
 
-`kaggle_run.sh`:
-1. Pushes the notebook (which queues a Kaggle run by default)
-2. Polls kernel status every 60s
-3. Pulls the kernel output (best.pt + log) to `checkpoints/kaggle/`
-
-If the run takes longer than the polling timeout (default 12 h, the Kaggle session limit), the script exits with status 3. The Kaggle run keeps going; pull later with:
-
-```bash
+# 3. When done, pull the trained checkpoint locally
 bash scripts/kaggle_pull_checkpoint.sh
 ```
 
+### When to use CLI push
+
+`scripts/kaggle_push_notebook.sh` is still useful for:
+- **First-time kernel creation** (no kernel exists yet)
+- **Dataset-attachment changes** (KAGGLE_CHECKPOINT_SLUG, etc.)
+- **Notebook-structure changes** (cells reordered, new cells added)
+
+After running it, **re-select T4 in the Kaggle UI** before triggering a run.
+
+### Why `kaggle_run.sh` (the auto-push-then-run loop) is now opt-in only
+
+Previously `kaggle_run.sh` did `kaggle kernels push` + poll + pull. The push step was the source of the P100/T4 problem — it queues a run on whatever your default GPU is. Now the script defaults to `SKIP_PUSH=1` so it only polls + pulls a run you started manually from the UI. If you really want the old behavior (e.g. you're on a T4-default account), set `SKIP_PUSH=0`.
+
 ### Hands-off loop (GitHub Actions)
 
-When you push a change to `notebooks/kaggle_train.ipynb` on `main`, the **Deploy notebook to Kaggle** workflow runs automatically and updates your Kaggle kernel. By default `kaggle kernels push` also queues a new run — if that's not what you want for a particular update, cancel from the Kaggle UI.
-
-To trigger from GitHub: **Actions → Deploy notebook to Kaggle → Run workflow**.
+The **Deploy notebook to Kaggle** workflow is now `workflow_dispatch` only (manual trigger from the Actions tab) instead of auto-running on every notebook commit. Same reason: the CLI push resets the accelerator.
 
 ### Promoting a Kaggle checkpoint to a release
 

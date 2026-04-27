@@ -1,6 +1,16 @@
 #!/bin/bash
 # Push or version the Kaggle kernel (notebook).
 #
+# WARNING: this push will reset the kernel's accelerator to your Kaggle
+# account default. The Kaggle SaveKernel API exposes only
+# enable_gpu=true/false, not GPU TYPE. If your default is P100 and you
+# wanted T4, you must re-select T4 in the Kaggle UI after this push.
+#
+# Use this only when you actually need to push the notebook structure
+# (first-time kernel creation, dataset-attachment changes, cell layout
+# changes). For code-only updates, just `git push` and trigger a run
+# from the Kaggle UI — the notebook git-pulls at runtime.
+#
 # Stages the notebook + a kernel-metadata.json into a staging directory
 # and runs `kaggle kernels push`. The notebook's REPO_REF is left at
 # whatever the file specifies (default 'main'); the kernel will git
@@ -69,4 +79,11 @@ kaggle kernels push -p "$STAGE"
 
 echo
 echo "Kernel URL: https://www.kaggle.com/code/${KAGGLE_USERNAME}/${KAGGLE_KERNEL_SLUG}"
-echo "  Click 'Run All' on Kaggle, or use:  bash scripts/kaggle_run.sh"
+echo
+echo "** ACCELERATOR NOTICE **"
+echo "The push reset the kernel's accelerator to your Kaggle account default."
+echo "If you want T4 (recommended): open the kernel above, click Edit,"
+echo "Settings panel → Accelerator → 'GPU T4 x2', then Save & Run All."
+echo "Triggering a run via CLI right now would use whichever GPU your account"
+echo "defaults to, which is currently P100 (sm_60, not supported by Kaggle's"
+echo "PyTorch image)."

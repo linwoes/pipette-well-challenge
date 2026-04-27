@@ -19,22 +19,26 @@ name: Deploy notebook to Kaggle
 #   KAGGLE_CHECKPOINT_SLUG   (default: pipette-well-checkpoint;
 #                             empty string disables resume on Kaggle)
 
+# NOTE: This workflow is manual-trigger only.
+#
+# `kaggle kernels push` does not preserve the kernel's accelerator type
+# (the SaveKernel API only has enable_gpu=true/false; the actual GPU type
+# defaults to whatever Kaggle assigns for the account, which can be P100).
+# Auto-pushing on every notebook commit would silently reset T4 → P100
+# repeatedly. The notebook git-pulls fresh code at runtime anyway, so
+# code changes don't require a re-push to flow into Kaggle.
+#
+# Use this workflow only when you actually want to update the kernel
+# metadata (cells reordered, dataset attachments changed, etc.). After
+# it runs, re-select T4 in the Kaggle UI before triggering a run.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'notebooks/kaggle_train.ipynb'
-      - 'scripts/kaggle_push_notebook.sh'
-      - 'scripts/_kaggle_common.sh'
-      - '.github/workflows/kaggle-deploy.yml'
   workflow_dispatch:
     inputs:
-      run:
-        description: 'After pushing the notebook, also queue a run on Kaggle'
+      reason:
+        description: 'Why are you re-pushing the kernel? (logged in summary)'
         required: false
-        default: 'false'
-        type: choice
-        options: ['false', 'true']
+        default: 'metadata or notebook structure change'
+        type: string
 
 jobs:
   deploy:
@@ -77,12 +81,15 @@ jobs:
         env:
           KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
           KAGGLE_KERNEL_SLUG: ${{ vars.KAGGLE_KERNEL_SLUG || 'pipette-well-training' }}
+          REASON: ${{ inputs.reason }}
         run: |
           {
             echo "### Kaggle kernel updated"
             echo ""
+            echo "Reason: $REASON"
+            echo ""
             echo "[Open kernel on Kaggle](https://www.kaggle.com/code/${KAGGLE_USERNAME}/${KAGGLE_KERNEL_SLUG})"
             echo ""
-            echo "Note: \`kaggle kernels push\` queues a new run by default. If you wanted a"
-            echo "code-only update, cancel the run from the Kaggle UI."
+            echo "**Important**: this push reset the accelerator to your Kaggle account"
+            echo "default. Re-select **GPU T4 x2** in the Kaggle UI before running."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,21 +1,26 @@
 #!/bin/bash
-# Full deployment loop: push notebook → trigger run → poll → pull output.
+# Poll a Kaggle kernel run and pull its output when done.
 #
-# `kaggle kernels push` not only updates the kernel code but also queues
-# a new run, so this script just needs to push, poll status, and pull.
+# IMPORTANT: this script DEFAULTS to NOT pushing the notebook (SKIP_PUSH=1).
+# `kaggle kernels push` resets the kernel's accelerator to your account
+# default — if that's P100 and you want T4, the push silently undoes your
+# UI change. The recommended workflow is:
+#   1. Trigger the run manually from the Kaggle UI (preserves T4)
+#   2. Then run this script to poll + pull
+#
+# Set SKIP_PUSH=0 to re-enable the auto-push behavior (only useful if your
+# Kaggle account default GPU is the one you actually want, e.g. T4).
 #
 # Usage:
-#   bash scripts/kaggle_run.sh
+#   bash scripts/kaggle_run.sh                   # poll + pull (no push)
+#   SKIP_PUSH=0 bash scripts/kaggle_run.sh       # push + poll + pull
 #
 # Env overrides:
 #   POLL_INTERVAL_S    seconds between status polls (default 60)
 #   MAX_WAIT_S         max wait before giving up (default 43200 = 12h, the
-#                      Kaggle session limit; if hit, the kernel may still
-#                      complete and you can re-run kaggle_pull_checkpoint.sh
-#                      later)
-#   SKIP_PUSH          if set to 1, skip the kernel push and just poll the
-#                      currently-running version (use this if you launched
-#                      the run manually on the Kaggle UI)
+#                      Kaggle session limit)
+#   SKIP_PUSH          1 (default) = skip push, just poll/pull;
+#                      0 = also push the notebook (resets accelerator!)
 
 source "$(dirname "$0")/_kaggle_common.sh"
 
@@ -23,10 +28,15 @@ POLL_INTERVAL_S="${POLL_INTERVAL_S:-60}"
 MAX_WAIT_S="${MAX_WAIT_S:-43200}"
 KERNEL_ID="${KAGGLE_USERNAME}/${KAGGLE_KERNEL_SLUG}"
 
-if [ "${SKIP_PUSH:-0}" != "1" ]; then
+if [ "${SKIP_PUSH:-1}" != "1" ]; then
     echo "[1/3] Pushing notebook..."
+    echo "WARNING: this will reset the kernel's accelerator to your Kaggle"
+    echo "         account default. If you wanted T4 and your default is"
+    echo "         P100, re-select T4 in the UI before this run starts."
     bash "$(dirname "$0")/kaggle_push_notebook.sh"
     echo
+else
+    echo "[1/3] SKIP_PUSH=1 — assuming a run is already queued/active on Kaggle."
 fi
 
 echo "[2/3] Polling kernel status (every ${POLL_INTERVAL_S}s, max ${MAX_WAIT_S}s)..."
