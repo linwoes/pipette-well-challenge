@@ -32,15 +32,20 @@ fi
 echo "[2/3] Polling kernel status (every ${POLL_INTERVAL_S}s, max ${MAX_WAIT_S}s)..."
 elapsed=0
 while [ "$elapsed" -lt "$MAX_WAIT_S" ]; do
+    # Kaggle status output looks like:
+    #   "<owner>/<slug> has status \"KernelWorkerStatus.RUNNING\""
+    # We want the bit after the dot. The `|| true` and `: ${var:=…}` pattern
+    # keeps a failed extraction from killing the loop under set -euo pipefail.
     status_json="$(kaggle kernels status "$KERNEL_ID" 2>&1 || true)"
-    status="$(echo "$status_json" | grep -oE 'status[":[:space:]]+"?[a-zA-Z]+' | head -1 | grep -oE '[a-zA-Z]+$' || echo unknown)"
+    status="$(printf '%s' "$status_json" | sed -nE 's/.*KernelWorkerStatus\.([A-Za-z]+).*/\1/p' | head -1 || true)"
+    : "${status:=unknown}"
     printf '  [%4ds] status=%s\n' "$elapsed" "$status"
     case "$status" in
-        complete|completed)
+        COMPLETE|complete|completed|Complete)
             echo "Kernel completed."
             break
             ;;
-        error|cancelAcknowledged|cancelRequested)
+        ERROR|error|CANCELACKNOWLEDGED|CANCELREQUESTED|cancelAcknowledged|cancelRequested|Failed|FAILED)
             echo "Kernel ended in non-success state: $status"
             echo "$status_json"
             exit 2
