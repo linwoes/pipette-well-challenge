@@ -148,6 +148,10 @@ models/*.pt
 # Release weights, synthetic labels, and synthetic/real MP4s are tracked
 # via Git LFS (see .gitattributes) — do not add ignore rules for them here.
 
+# Kaggle deployment staging (created by scripts/kaggle_*.sh; symlinks + metadata)
+.kaggle_stage/
+checkpoints/kaggle/
+
 # Temporary files
 temp/
 tmp/

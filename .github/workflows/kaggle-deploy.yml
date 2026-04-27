@@ -1,0 +1,88 @@
+name: Deploy notebook to Kaggle
+
+# Pushes notebooks/kaggle_train.ipynb to your Kaggle kernel whenever the
+# notebook (or the push script itself) changes on main, so Kaggle always
+# has the latest code path. Does NOT auto-trigger a run by default —
+# `kaggle kernels push` does queue a new run when called, but we want
+# explicit control over GPU spend, so we use --no-run via a flag. To run
+# manually, use the workflow_dispatch trigger with run=true, or run
+# `bash scripts/kaggle_run.sh` from your laptop.
+#
+# Required GitHub secrets:
+#   KAGGLE_USERNAME — your Kaggle username
+#   KAGGLE_KEY      — API key from Kaggle Account → Create New API Token
+#                     (the "key" field of the downloaded kaggle.json)
+#
+# Optional repository variables:
+#   KAGGLE_KERNEL_SLUG       (default: pipette-well-training)
+#   KAGGLE_DATA_SLUG         (default: pipette-well-dataset)
+#   KAGGLE_CHECKPOINT_SLUG   (default: pipette-well-checkpoint;
+#                             empty string disables resume on Kaggle)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'notebooks/kaggle_train.ipynb'
+      - 'scripts/kaggle_push_notebook.sh'
+      - 'scripts/_kaggle_common.sh'
+      - '.github/workflows/kaggle-deploy.yml'
+  workflow_dispatch:
+    inputs:
+      run:
+        description: 'After pushing the notebook, also queue a run on Kaggle'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Kaggle CLI
+        run: pip install --quiet kaggle
+
+      - name: Configure Kaggle credentials
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY: ${{ secrets.KAGGLE_KEY }}
+        run: |
+          if [ -z "$KAGGLE_USERNAME" ] || [ -z "$KAGGLE_KEY" ]; then
+            echo "::error::KAGGLE_USERNAME and KAGGLE_KEY repository secrets are required."
+            echo "Set them at: Settings → Secrets and variables → Actions → New repository secret"
+            exit 1
+          fi
+          mkdir -p ~/.kaggle
+          printf '{"username":"%s","key":"%s"}\n' "$KAGGLE_USERNAME" "$KAGGLE_KEY" > ~/.kaggle/kaggle.json
+          chmod 600 ~/.kaggle/kaggle.json
+
+      - name: Push notebook to Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KERNEL_SLUG: ${{ vars.KAGGLE_KERNEL_SLUG || 'pipette-well-training' }}
+          KAGGLE_DATA_SLUG: ${{ vars.KAGGLE_DATA_SLUG || 'pipette-well-dataset' }}
+          KAGGLE_CHECKPOINT_SLUG: ${{ vars.KAGGLE_CHECKPOINT_SLUG || 'pipette-well-checkpoint' }}
+        run: bash scripts/kaggle_push_notebook.sh
+
+      - name: Summary
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KERNEL_SLUG: ${{ vars.KAGGLE_KERNEL_SLUG || 'pipette-well-training' }}
+        run: |
+          {
+            echo "### Kaggle kernel updated"
+            echo ""
+            echo "[Open kernel on Kaggle](https://www.kaggle.com/code/${KAGGLE_USERNAME}/${KAGGLE_KERNEL_SLUG})"
+            echo ""
+            echo "Note: \`kaggle kernels push\` queues a new run by default. If you wanted a"
+            echo "code-only update, cancel the run from the Kaggle UI."
+          } >> "$GITHUB_STEP_SUMMARY"
