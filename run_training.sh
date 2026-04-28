@@ -71,6 +71,7 @@ COL_WEIGHT="${COL_WEIGHT:-2.0}"                # v6: upweight column head
 LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
 TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-3}"           # v12: 10× increase (was 1e-4) to combat overfitting
 
 # RESUME from v9 best.pt — same architecture, compatible checkpoint
 
@@ -85,6 +86,7 @@ echo "  IMG_SIZE       : ${IMG_SIZE}  FRAMES: ${NUM_FRAMES}  BATCH: ${BATCH_SIZE
 echo "  FOCAL_GAMMA    : ${FOCAL_GAMMA}  COL_WEIGHT: ${COL_WEIGHT}"
 echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
 echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
+echo "  WEIGHT_DECAY   : ${WEIGHT_DECAY}"
 echo "  RESUME         : ${RESUME:-none}"
 
 # Synthetic data uses a leak-free split (real-only val, real+synth-of-train).
@@ -116,6 +118,7 @@ fi
   --lora_rank               "${LORA_RANK}" \
   --temporal_layers         "${TEMPORAL_LAYERS}" \
   --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
+  --weight_decay            "${WEIGHT_DECAY}" \
   ${SYNTHETIC_ARG} \
   ${RESUME:+--resume "${RESUME}"} \
   2>&1 | tee "${TRAINING_OUTPUT_DIR}/training_${TRAINING_VERS}.log"
