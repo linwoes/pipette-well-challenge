@@ -16,7 +16,12 @@ End-to-end flow: **local dev → GitHub → Kaggle (T4 GPU) → checkpoint back*
 
 ## Why this exists
 
-CPU training runs at ~4.3 hours/epoch on the current laptop. A Kaggle T4 brings that to ~10–15 minutes/epoch. The free tier gives 30 GPU hours/week — enough for one full 80-epoch run with patience-based early stopping.
+CPU training runs at ~4.3 hours/epoch on the current laptop. A Kaggle T4 brings that to approximately:
+
+- **Real-only mode** (`USE_SYNTHETIC=0`): 80 clips ÷ batch 2 = 40 steps/epoch × ~8 s/step ≈ **~5 min/epoch** — all 80 epochs in one 7-hour session.
+- **Real + synthetic** (`USE_SYNTHETIC=1`): 640 clips ÷ batch 2 = 320 steps/epoch × ~8 s/step ≈ **~39 min/epoch** — ~18 epochs per 12-hour session; needs 4–5 sessions with checkpoint resume.
+
+The free tier gives 30 GPU hours/week — enough for a full real-only run in one session, or two resumed sessions of a real+synthetic run.
 
 ## One-time setup
 
@@ -161,4 +166,4 @@ KAGGLE_CHECKPOINT_SLUG    # default: pipette-well-checkpoint (empty = no resume)
 | Kaggle Free | 30 | 12 h |
 | Kaggle GPU+ | 30 (T4 x2 / P100) | 12 h |
 
-A full v11 run from scratch is ~80 epochs × ~12 min = ~16 GPU hours. With a resume from the v10 best.pt (which already has the type head trained perfectly), it's typically much shorter.
+A full v11 real+synthetic run from scratch is ~80 epochs × ~39 min ≈ 52 GPU hours (4–5 sessions). A v12 real-only run is ~80 epochs × ~5 min ≈ 7 GPU hours (one session).

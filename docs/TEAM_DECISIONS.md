@@ -656,6 +656,38 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 
 ---
 
+## Decision 12: Batch Size Reduced to 2 for T4 Compatibility (Apr 27, 2026)
+
+**Decision:** Set `BATCH_SIZE=2` (down from 8) for all Kaggle T4 training runs.
+
+**Rationale:** At `img_size=448`, `N=8` frames, and `B=8`, the effective backbone input is `B×N=64` sequences of 1024 tokens through 12 ViT transformer layers. The backward pass (saved activations) exhausts T4 VRAM (~14.6 GB) mid-first-epoch. The smoke test ran in `eval()+no_grad()` and did not catch this. `B=2` gives `B×N=16` backbone calls per step and fits comfortably.
+
+**Tradeoff:** Effective batch is smaller (gradient noise higher). Gradient accumulation would recover effective batch size but is not currently implemented.
+
+---
+
+## Decision 13: Fix AMP-Incompatible BCE in Well-Consistency Loss (Apr 27, 2026)
+
+**Decision:** Wrap the well-consistency loss block in `torch.cuda.amp.autocast(enabled=False)` and cast logits to `float32` before computing `F.binary_cross_entropy`.
+
+**Rationale:** The well-consistency loss computes an outer product of two sigmoid outputs — a probability, not a logit — so `binary_cross_entropy_with_logits` cannot be used. PyTorch's autocast (AMP) forbids `F.binary_cross_entropy` on half-precision tensors. The fix computes only this sub-block in fp32; the rest of the forward pass stays in mixed precision.
+
+---
+
+## Decision 14: v11 Overfitting Diagnosis — Synthetic→Real Gap (Apr 28, 2026)
+
+**Decision:** v11 training (640 clips: 80 real + 560 synthetic, `WEIGHT_DECAY=1e-4`) exhibited severe overfitting: train Jaccard reached 83% by epoch 18 while val Jaccard remained at ~0% throughout. Val loss improved through epoch 6 then steadily worsened. Best checkpoint: epoch 6, val_loss=0.4745.
+
+**Root cause hypothesis:** 87.5% of training samples are synthetic but all 20 val samples are real. The model memorises the synthetic distribution and fails to generalise to real clips.
+
+**Action taken (v12):**
+1. `USE_SYNTHETIC=0` — real-only training (80 train / 20 val) to isolate whether the model can learn from real data at all before reintroducing synthetics.
+2. `WEIGHT_DECAY=1e-3` — 10× increase (was `1e-4`) to slow memorisation of the small training set.
+
+**Expected outcome:** If val Jaccard rises under real-only training, the synthetic generation quality needs improvement before being reintroduced. If it remains at 0%, the problem is in the model or data pipeline.
+
+---
+
 ## Appendix: Decision Timeline
 
 | Date | Decision | Owner | Status |
@@ -668,12 +700,15 @@ git branch baseline/resnet-cv-pipeline  # Branched from current state
 | Apr 14 | [NEW] Temporal Transformer mandatory | Architect + ML Scientist | FINAL |
 | Apr 14 | [NEW] Branch preservation: baseline/resnet-cv-pipeline | Engineer | FINAL |
 | Apr 14 | [NEW] 3DGS research track | Architect | FINAL |
+| Apr 27 | [NEW] Batch size 8→2 for T4 VRAM (Decision 12) | Engineer | FINAL |
+| Apr 27 | [NEW] AMP-safe BCE fix in well-consistency loss (Decision 13) | Engineer | FINAL |
+| Apr 28 | [NEW] v11 overfitting diagnosis; v12 real-only + weight decay 10× (Decision 14) | ML Scientist | FINAL |
 
 ---
 
 **Document Status:** FINAL  
-**Last Updated:** April 15, 2026  
-**Next Review:** After hold-out evaluation completion
+**Last Updated:** April 28, 2026  
+**Next Review:** After v12 real-only validation results
 
 **Key References:**
 - `docs/ML_STACK.md` — DINOv2 + temporal architecture, synthetic data strategy, training protocols
