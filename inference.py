@@ -106,7 +106,7 @@ class PipetteWellDetector:
             num_columns=cfg.get('num_columns', 12),
             shared_backbone=cfg.get('shared_backbone', True),
             use_lora=cfg.get('use_lora', True),
-            lora_rank=cfg.get('lora_rank', 4),
+            lora_rank=cfg.get('lora_rank', 2),
             temporal_layers=cfg.get('temporal_layers', 1),
             img_size=cfg.get('img_size', self.img_size),
         )
@@ -274,8 +274,8 @@ class PipetteWellDetector:
         confident = True
 
         output = format_json_output(
-            clip_id_fpv=fpv_path,
-            clip_id_topview=topview_path,
+            clip_id_fpv=Path(fpv_path).stem,
+            clip_id_topview=Path(topview_path).stem,
             wells=wells,
             inference_time_s=inference_time,
             confident=confident,
@@ -337,8 +337,8 @@ class PipetteWellDetector:
                     'error': True,
                     'error_message': str(e),
                     'error_type': type(e).__name__,
-                    'clip_id_fpv': fpv_path,
-                    'clip_id_topview': topview_path,
+                    'clip_id_FPV': Path(fpv_path).stem,
+                    'clip_id_Topview': Path(topview_path).stem,
                     'wells_prediction': [],
                     'metadata': {
                         'inference_time_s': time.time() - start_time,
