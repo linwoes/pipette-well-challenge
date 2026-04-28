@@ -1,646 +1,268 @@
-# Transfyr AI Pipette Well Detection: Architectural Proposals
+# Transfyr AI Pipette Well Detection: Architecture
 
-**Document:** System Architecture & Design Recommendations  
-**Date:** 2026-04-14  
-**Role:** Software/ML Architect  
-**Audience:** ML Scientists, Development Team  
+**Document:** System Architecture & Design  
+**Date:** 2026-04-14 (revised 2026-04-28)  
 **Status:** FINAL
 
 ---
 
-## Executive Summary
+## Selected Architecture: DINOv2-ViT-B/14 + LoRA + Temporal Transformer + Late Fusion
 
-This document presents five distinct architectural proposals for solving the Transfyr pipette well detection challenge: Classical CV, Deep Learning (with temporal modeling and Foundation Models), Hybrid, 3D Gaussian Splatting, and Acoustic-Visual Fusion. Given the constraints—100 training samples, **<2 min per dual-view sample** (20 min total for ~10 samples), multi-label outputs, dual-view inputs, acoustic signal availability, and 96-well grid prediction—the choice depends on physical accuracy requirements and deployment context.
+**Implementation status:** Fully implemented in [src/models/backbone.py](../src/models/backbone.py) and [src/models/fusion.py](../src/models/fusion.py).
 
-**Critical Insight:** The lab bench is a dynamic 3D physical environment. Robust solutions must model physics explicitly, not treat the task as 2D image classification.
+### Why This Architecture
 
-**Inference SLA:** <2 min per dual-view sample (20 min total for ~10 samples)
+Three constraints dominate the problem:
 
----
+1. **N=100 training samples** — rules out full fine-tuning of any large model. LoRA (rank r=4, ~12M trainable params out of ~86M frozen) is the only viable path.
+2. **Dual-view geometric incompatibility** — FPV uses perspective projection (depth-dependent pixel position); top-view uses orthographic (depth-independent). Early fusion conflates incompatible coordinate systems. Late fusion is geometrically mandated, not a preference.
+3. **"Dispense" is a temporal event** — tip enters well, stays, leaves. Single-frame models cannot distinguish these phases. A temporal transformer over sampled frames is required.
 
-## Physical AI Design Principles
-
-### Core Principles
-
-1. **Scene Geometry Over Pixel Classification**
-   - The well plate has 3D structure and the pipette is a rigid 3D object
-   - The task is: "At what 3D coordinate in lab space is the tip?"
-   
-2. **Camera Projection Incompatibility (Geometric Mandate)**
-   - FPV uses perspective projection: depth-dependent pixel position
-   - Top-view uses orthographic projection: depth-independent pixel position
-   - **Geometric Mandate:** Late fusion is geometrically REQUIRED, not a preference
-   - Early fusion explicitly FORBIDDEN; conflates incompatible coordinate systems
-
-3. **Material Properties Matter**
-   - Polystyrene reflects and refracts light specularly
-   - Depth-aware reasoning is required
-
-4. **Temporal Semantics**
-   - A "dispense" is an event (tip enters → stays → leaves)
-   - Temporal models distinguish these phases; single-frame models fail
-
-5. **Multimodal Verification**
-   - Audio provides high-fidelity ground truth: pipette click + liquid plink
-   - Acoustic signals anchor which video frames contain dispense
-   - Video confirms spatial location; audio confirms temporal event
+DINOv2's self-supervised pre-training on 142M images gives spatial patch embeddings that transfer to novel domains with minimal fine-tuning. At img_size=448, the backbone produces 32×32=1024 patches at 14px each — sufficient resolution to distinguish individual wells in the 8×12 grid.
 
 ---
-
-## Problem Statement (Refined)
-
-**Input:**
-- Two synchronized video clips: FPV + Top-view
-- Audio stream (optional but recommended)
-- 96-well plate (8 rows × 12 columns)
-- Multi-channel dispensing: 1–8 wells simultaneously
-
-**Output:**
-- JSON: `[{"well_row": "A", "well_column": 1}, ...]`
-
-**Constraints:**
-- Training data: 100 labeled examples
-- Inference latency: **<2 min per dual-view sample (20 min total for ~10 samples)** 
-- Batch inference: ~2–12 seconds per sample on GPU
-- Accuracy: Match human labeler on held-out set
-
----
-
-## Architecture 1: Classical Computer Vision + Geometric Pipeline
-
-### Overview
-
-Deterministic, rule-based pipeline. Modular, interpretable, no training data required.
-
-### Key Components
-
-1. **Plate Detection & Rectification (Top-view):** Edge detection, homography estimation
-2. **Well Grid Overlay:** Template matching, pixel-to-well mapping
-3. **Pipette Tip Detection (FPV):** Color thresholding, blob detection
-4. **Optical Flow & Motion Tracking:** Lucas-Kanade, velocity estimation for dispense detection
-5. **Multi-View Fusion (Late Fusion):** Geometric triangulation respecting each view's projection model
-
-### Strengths
-- Interpretable; every step explicit
-- No training required
-- Generalizes to different plate formats
-- Fast (<1–5 sec per video pair)
-
-### Weaknesses
-- Calibration complexity
-- Lighting sensitivity
-- Occlusion handling
-- Synchronization overhead
-
-### Status
-Good as fallback; not primary recommendation due to temporal blindness.
-
----
-
-## Architecture 2: Deep Learning with Temporal Modeling & Foundation Models (Primary Implementation)
-
-### Overview
-
-Primary implementation uses **DINOv2-ViT-B/14 (frozen) + LoRA adapters + Temporal Transformer + Late Fusion**. Enables few-shot learning on N=100 samples.
-
-### PRODUCTION PRIMARY: DINOv2-ViT-B/14 + LoRA (IMPLEMENTED IN CODE)
-
-**DINOv2-ViT-B/14 (PRIMARY, 2023):**
-- Pre-trained on 142M unlabeled images via self-supervised DINO contrastive learning
-- Spatial patch embeddings: 196 patches (14×14 grid, each 768-dim)
-- LoRA fine-tuning (rank r=8, α=16): only ~33K trainable params (frozen backbone ~86M)
-- Few-shot superior: +8% accuracy vs. ResNet-50 on 10-shot benchmarks (published)
-- Expected accuracy: 70–80% on real held-out validation (vs. ResNet's 50–60%)
-- **Status:** IMPLEMENTED in src/models/backbone.py and src/models/fusion.py
-
-**VideoMAE (FUTURE ALTERNATIVE, NOT YET IMPLEMENTED):**
-- Kinetics-400 pre-training provides excellent temporal video understanding
-- Would be superior for temporal modeling if integrated
-- Status: Discussed as future enhancement; not in current codebase
 
 ### Data Flow
 
 ```
-[FPV Video] → Frame Sampling (8 frames) → DINOv2-ViT-B/14 + LoRA
-                                          ↓ Temporal Attention
-                                          → FPV features (768,)
-                                                      ↓ Late Fusion (Cross-attention)
-[Top-view Video] → Frame Sampling → DINOv2-ViT-B/14 + LoRA
-                                   ↓ Temporal Attention
-                                   → Top-view features (768,)
-                                                      ↓ Output Head
-                                                      → Multi-label prediction
+[FPV Video]      → Sample 8 frames → [B×N, 3, 448, 448]
+                                    → DINOv2-ViT-B/14 (frozen) + LoRA adapters
+                                    → [B×N, 768]
+                                    → reshape → [B, N, 768]
+                                    → Temporal Transformer (1 layer, 8 heads)
+                                    → mean pool → [B, 768]
+                                                        ↓
+                                               Concat → [B, 1536]
+                                                        ↓
+                                               Fusion MLP (1536→512→256)
+                                                        ↓
+                                    ┌───────────────────┼───────────────────┐
+                                    ↓                   ↓                   ↓
+                             Row head (256→8)   Col head (256→12)   Type head (256→3)
+                             raw logits         raw logits           single/row/col
+
+[Top-view Video] → same backbone (shared weights) → [B, 768]
 ```
 
-### Key Architecture Decisions
-
-#### DINOv2 + LoRA Fine-tuning
-- Start with DINOv2 pre-trained weights (downloaded from Meta)
-- Freeze base transformer; fine-tune only LoRA adapters + classification head
-- Learning rate: 1e-4 (much lower than full fine-tuning)
-- Batch size: 8–16 (can increase due to LoRA efficiency)
-- Latency: ~80ms/frame on GPU (V100/A100)
-
-#### Temporal Modeling with Temporal Transformer (MANDATORY)
-- Cannot use single-frame models; max-pooling destroys temporal order
-- "Dispense" is a causal event: tip entrance → well insertion → liquid release
-- Temporal transformer learns motion patterns; identifies which frame contains dispense event
-- Samples 4–8 frames uniformly across video duration
-- Temporal Transformer implementation enables efficient temporal feature learning
-
-#### Late Fusion Strategy (ARCHITECTURAL MANDATE)
-
-**Geometric Incompatibility:**
-```
-FPV (perspective projection):
-  Pixel p1 = π(X, z)  [depth-dependent]
-  
-Top-view (orthographic):
-  Pixel p_ortho ≈ (x, y)  [depth-independent]
-
-Early Fusion (FORBIDDEN):
-  [FPV_features(p1)] + [TopView_features(p_ortho)]
-  Network learns ad-hoc mapping for training videos
-  FAILS on new camera angle or plate position
-
-Late Fusion (MANDATED):
-  FPV_features = Encoder_FPV([image]) in FPV frame
-  TopView_features = Encoder_TopView([image]) in world frame
-  Fused = CrossAttention(query=FPV, key_value=TopView)
-  Each view encoded in native frame; fusion respects geometry
-  GENERALIZES across angles and positions
-```
-
-**Cross-attention fusion (strongly preferred):**
-```
-FPV (768,) → Query ────┐
-                       ├─> Multi-head cross-attention (8 heads)
-TopView (768,) → Key/Value ────┘
-                       → Attended FPV (768,)
-                       │
-                       ├─> Concat (1536,) → FC → (256,) → Output Head
-                       │
-FPV (768,) ─────────────┘
-```
-
-**Why Late Fusion:**
-1. Respects projection geometry (each view in native space first)
-2. Reduces interference between incompatible coordinate systems
-3. More interpretable (visualize view dominance per well)
-4. Empirically more robust (proven in stereo/multi-view literature)
-
-**ARCHITECTURAL MANDATE:** All architectures use Late Fusion. Early fusion is explicitly forbidden everywhere in this document.
-
-#### Output Head: Sequence-to-Label (RECOMMENDED)
-```
-Fused features (T=8, 256,) → Temporal attention decoder
-                           → Event logits (per frame)
-                           → Dispense event index (frame_idx ∈ [0, T-1])
-                           → Spatial head at frame_idx
-                           → FC(256 → 96) → well logits
-```
-Explicitly models "when did tip enter well?" and "which well?"
-
-### Training Strategy
-
-**Strategy 1: Transfer Learning + Heavy Augmentation (FOUNDATION)**
-- Start with DINOv2 pre-trained weights (frozen)
-- Fine-tune only LoRA adapters + fusion + head
-- Augmentation: crop, temporal jitter, rotation, brightness, blur, flip, ColorJitter
-- Regularization: Dropout (p=0.3), L2 decay, early stopping, Mixup
-- Batch size: 8–16, AdamW, lr=1e-4, cosine annealing
-
-**Strategy 2: Synthetic Data Generation (Recommended)**
-- Generate 5–10× synthetic clips for undersampled wells
-- Use Stable Video Diffusion or physics-based simulation
-- Target: 500–1000 synthetic clips total
-- Mix synthetic + real in training (50/50 split)
-
-### Latency Analysis (CRITICAL CORRECTION)
-
-**Batch inference budget:** <2 min per dual-view sample (20 min total for ~10 samples)
-
-**Per-sample breakdown (GPU, batch of 10):**
-- Video preprocessing: ~50–100ms (amortized across batch)
-- DINOv2 + LoRA backbone: ~80ms/frame × 8 frames ≈ 150ms per sample
-- Temporal Transformer attention: ~100ms per sample
-- Late fusion (cross-attention): ~10ms
-- Output head (Sequence-to-Label): ~20ms
-- **Total forward pass:** ~200–300ms per sample
-- **Overhead (I/O, serialization):** ~50ms
-
-**Total per sample (batch of 10):** ~300ms on GPU
-
-**For 10 samples together:** ~3–5 seconds (highly parallelizable)
-
-**Headroom:** 20 min − 5 sec ≈ 19 min 55 sec remaining for validation, error analysis, logging
-
-**CRITICAL IMPACT:** This correction LIFTS the artificial per-sample constraint. DINOv2 is now FAVORABLE over ResNet-18 when amortized over batch processing.
-
-### Strengths
-1. Foundation model few-shot learning on N=100
-2. LoRA efficiency (only ~1% trainable parameters)
-3. Temporal awareness (distinguishes dispense phases)
-4. Robust to variation (augmentation + pre-training)
-5. Fast inference (~300ms batch)
-6. Late fusion is geometrically sound
-7. No camera calibration required
-
-### Weaknesses
-1. Requires synthetic data augmentation
-2. Black-box; difficult to debug errors
-3. May need retraining for new pipette types
-4. GPU required (CPU ~3–5s per sample)
-5. Class imbalance risk
-6. Synthetic data quality critical
+**Outputs:** Raw logits — sigmoid applied at inference time. Type head selects decoding strategy (argmax for single-well, full-row, full-column).
 
 ---
 
-## Architecture 3: 3D Gaussian Splatting (3DGS)
+### Key Decisions
 
-### Overview
+#### Shared Backbone
+Both views share one DINOv2 backbone (`shared_backbone=True`). This halves trainable parameters and acts as a regularizer — the backbone must learn features useful for both perspectives simultaneously.
 
-Reconstructs 3D scene geometry from dual-view video. Handles specular reflections/refractions. Computationally expensive; unsuitable for production throughput.
+#### Factorized Row/Column Heads
+Row logits (8) and column logits (12) are independent binary classifiers rather than a single 96-class head. This reduces output dimensionality 4× (20 vs 96), works naturally for full-row and full-column dispense patterns, and avoids the combinatorial explosion of well combinations.
 
-### Strengths
-- Physical realism; explicit depth modeling
-- Immune to glare/refraction
-- Generalizes across cameras/lighting
+#### Type Head
+A 3-class head (single-well / full-row / full-column) disambiguates decoding at inference: the predicted type selects the argmax strategy, eliminating threshold sensitivity. Type labels are derived from row/column cardinality at training time — no additional annotation required.
 
-### Weaknesses
-- **Latency prohibitive:** 10–60 min per sample (exceeds 20-min batch budget)
-- Calibration overhead: 1 hour one-time setup
-- SfM fragility on featureless plates
-- Overkill if Architecture 2 achieves 88%+ accuracy
+#### Late Fusion (Geometric Mandate)
+```
+FPV (perspective):   pixel = π(X, z)    — depth-dependent
+Top-view (ortho):    pixel ≈ (x, y)     — depth-independent
 
-### Status
-Excellent for research validation; unsuitable for production.
+Early fusion:   concat raw features before encoding
+                → network memorises per-video mapping
+                → fails on any camera/plate position change
+
+Late fusion:    encode each view in its native frame
+                → concat encoded features [768, 768] → 1536
+                → fuse via MLP
+                → generalisable across viewpoints
+```
+
+Early fusion is explicitly forbidden.
+
+#### Image Resolution: 448px
+At 224px, DINOv2's position embeddings are compressed 5.3×, reducing spatial resolution per well. At 448px, 32×32=1024 patches provide adequate well-level granularity. The memory cost (~14 GB training on T4) is acceptable at batch size 2.
 
 ---
 
-## Architecture 4: Hybrid (Geometry + Foundation Models)
+### Training Configuration (current)
 
-### Overview
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Backbone | DINOv2-ViT-B/14 | Frozen; LoRA on Q, V projections |
+| LoRA rank | 4 | ~12M trainable params total |
+| img_size | 448 | 32×32=1024 patches |
+| Frames | 8 | Uniformly sampled per clip |
+| Batch size | 2 | T4 VRAM limit with 448px + backward pass |
+| Optimizer | AdamW | lr=1e-4, weight_decay=1e-3 |
+| LR schedule | Warmup (5 ep) + cosine annealing | |
+| Loss | Weighted BCE + well-consistency | focal_gamma=0, col_weight=2.0 |
+| Temporal layers | 1 | Single-layer transformer sufficient given small N |
+| Dropout | 0.3 | Throughout fusion MLP |
+| Augmentation | RandomResizedCrop, MotionBlur, ImageCompression, ColorJitter | Real clips only (val never augmented) |
 
-Combines geometric priors (Architecture 1) with learned foundation model features (Architecture 2). Uses late fusion.
-
-### Design
-```
-Geometric Prior (Classical CV):
-  Tip Detection → Rough prior: "tip near A5" (Gaussian over wells)
-  
-Learned Head (DINOv2 + Temporal Transformer):
-  Visual features → Refined prediction: "likely A5 or A6"
-  
-Late Fusion (mandated):
-  alpha * prior_logits + (1-alpha) * learned_logits
-  → Final softmax prediction
-```
-
-### Strengths
-- Robustness: geometry provides signal if vision fails
-- Sample efficiency: geometric constraints reduce overfitting
-- Interpretability: mixed components
-- Graceful degradation: one modality can fail
-
-### Weaknesses
-- Implementation complexity
-- Hyperparameter tuning (α)
-- Added latency (~100–500ms from CV)
-- Effort split may reduce effectiveness
-
-### Recommendation
-Good **fallback** if Architecture 2 underperforms (<88%). Not recommended as initial approach.
+**Data split:** Leak-free: real-only val (20 clips), real+synthetic train (80+560 clips). Synthetic clips excluded from val to prevent distribution contamination.
 
 ---
 
-## Architecture 5: Acoustic-Visual Fusion (Multimodal Verification) — NEW
+### Inference Latency
 
-### Overview
+Budget: <2 min per dual-view sample (20 min total for ~10 samples).
 
-**Adds acoustic modality as VERIFICATION layer.** The Transfyr system captures audio; this modality remains largely unexploited. Acoustic signals provide high-fidelity ground truth for dispense event timing without relying on visual occlusion.
+| Stage | Time (GPU, batch 10) |
+|-------|---------------------|
+| Video I/O + preprocessing | ~500ms |
+| DINOv2 backbone (8 frames × 2 views × 10) | ~150ms |
+| Temporal Transformer | ~100ms |
+| Fusion MLP + heads | ~30ms |
+| **Total** | **~0.8–1s** |
 
-### Key Principle
-
-**Audio is VERIFICATION layer, NOT PREDICTION layer:**
-- Audio CANNOT tell which well was dispensed into
-- Audio CAN confirm that dispense event occurred (pipette click + liquid plink unmistakable)
-- Audio provides precise temporal anchor: which video frames contain dispense
-
-### Design
-
-```
-[FPV Video] + [Top-view Video] ──> DINOv2 + LoRA ──> Temporal Transformer
-                                   (Late Fusion)
-                                   → visual_well_prediction
-                                   → confidence score
-                                                                │
-[Audio stream] ──> MFCC extraction (13 coeff, 25ms window)     │
-                ──> 1D CNN (3 layers) or LSTM                   │
-                ──> dispense_event_detected: bool              │
-                    dispense_timestamp: float                   │
-                                                ┌───────────────┘
-
-Acoustic-Visual Verification Logic:
-  IF dispense_event_detected AND visual_confidence > threshold:
-      output visual_well_prediction (HIGH CONFIDENCE path)
-  ELIF dispense_event_detected AND visual_confidence < threshold:
-      output visual_well_prediction with uncertainty flag
-  ELIF NOT dispense_event_detected:
-      output {"uncertain": true, "reason": "no_acoustic_dispense_detected"}
-```
-
-### Audio Preprocessing
-
-**MFCC Extraction:**
-- Input: Raw audio stream (e.g., 16 kHz, mono/stereo)
-- Window size: 25ms (overlap 10ms)
-- 13 Mel-Frequency Cepstral Coefficients (perceptual frequency range)
-- Output shape: (T_audio, 13) where T_audio = floor(duration / 10ms)
-
-### Acoustic Event Detector
-
-**1D CNN Architecture (Recommended):**
-```
-Input: (T_audio, 13) MFCC sequence
-  ↓
-Conv1D(13 → 32, kernel=5, stride=2) + ReLU + BatchNorm
-  ↓
-Conv1D(32 → 64, kernel=5, stride=2) + ReLU + BatchNorm
-  ↓
-Conv1D(64 → 128, kernel=5, stride=2) + ReLU + BatchNorm
-  ↓
-Global avg pool → (128,)
-  ↓
-FC(128 → 64) + ReLU + Dropout(0.3)
-  ↓
-FC(64 → 2) ──> Softmax ──> [p_silence, p_dispense]
-
-Output: p_dispense (float, 0–1), argmax → dispense_event_detected (bool)
-```
-
-**Alternative: Lightweight LSTM**
-```
-Input: (T_audio, 13)
-  ↓
-LSTM(32 → 64, num_layers=2, bidirectional) + Dropout(0.3)
-  ↓
-Last hidden state → (128,)
-  ↓
-FC(128 → 2) ──> Softmax ──> p_dispense
-```
-
-### Training
-
-- Label each audio segment: "dispense" (1) if click+plink audible, "silence" (0) otherwise
-- Balanced binary cross-entropy loss
-- Data: 5–10 audio examples per well type (simple annotation)
-
-### Temporal Alignment: Audio ↔ Video
-
-- Compute MFCC time per frame: t_audio = frame_idx × (hop_length / sr)
-- Convert dispense_event frame in audio → video frame via timestamp
-- Critical assumption: audio/video synchronized (hardware timestamps or frame indexing)
-
-### Strengths of Acoustic Verification
-
-- **High-fidelity ground truth:** Pipette click + liquid plink unmistakable acoustic signatures
-- **Robust to visual occlusion:** Even if pipette arm blocks camera, audio confirms dispense
-- **Precise temporal anchor:** Audio frame index indicates *when* dispense occurred; use to select best video frame for well localization
-- **Multimodal robustness:** Failure of one modality (blurry video) doesn't cascade; audio provides backup
-
-### Weaknesses
-
-- **Requires audio capture in deployment:** Not all lab setups have microphones or audio logging
-- **Silent pipettes break:** Electronic pipettes with silent plungers (no click) cannot be detected acoustically
-- **Ambient noise:** Lab background noise (ventilation, equipment) interferes with detection
-- **Synchronization overhead:** Audio-video alignment adds complexity; must handle clock drift
-
-### When to Use
-
-**Best for:**
-- Production deployment where audio available
-- Robustness to visual occlusion critical
-- Noisy visual environment (lighting changes, reflections)
-- High-reliability requirement (>95% accuracy)
-
-**Not needed for:**
-- Inference-only pipeline (no audio capture)
-- Low-occlusion setup (pipette visible >80%)
-- Real-time systems (MFCC + CNN adds ~200ms)
-
-### Latency Impact
-
-- MFCC extraction: ~50–100ms (entire audio clip)
-- 1D CNN forward pass: ~50ms
-- Acoustic-visual fusion: <5ms
-- **Total overhead:** ~150ms (one-time per sample, amortized across batch)
-
-**Net latency:** Architecture 2 (~300ms) + Architecture 5 acoustic (~150ms) = ~450ms per sample. **Still well under 20-min batch budget.**
+Headroom: ~19 min 59s.
 
 ---
 
-## Non-Negotiable Design Constraints
+### Success Criteria
 
-### For ALL Architectures
-
-1. **Late Fusion (Geometrically Mandated):**
-   - FPV uses perspective projection (depth-dependent)
-   - Top-view uses orthographic (depth-independent)
-   - **Early fusion explicitly forbidden everywhere in this document**
-   - All architectures must encode views separately, fuse via cross-attention at feature level
-
-### For Architecture 2 (Recommended)
-
-1. **Foundation model pre-training:** Must use DINOv2 or equivalent, NOT ResNet-18
-2. **LoRA fine-tuning:** Only ~1% trainable parameters (rank r=8)
-3. **Temporal backbone:** Temporal Transformer mandatory
-4. **Synthetic data generation:** 5–10× synthetic dispense events (recommended)
-5. **Temporal event detection:** Explicit Sequence-to-Label head
-6. **Image resolution:** img_size=448 recommended to preserve patch granularity; 224 compresses DINOv2 position embeddings 5.3×, causing per-well resolution issues. 448 yields 32×32=1024 patches for adequate well localization.
-7. **Validation accuracy:** Minimum **88%** on held-out set
-8. **Inference latency:** <300ms per sample on GPU (batch of 10)
-9. **Generalization:** ≥85% accuracy on unseen row/column combinations
-
-### For Architecture 5 (Acoustic-Visual)
-
-1. **Acoustic model:** ≥95% recall for dispense event detection
-2. **Audio-video sync:** Handle ±100ms temporal misalignment
-3. **Graceful silence handling:** Abstain if no dispense detected (don't trust vision alone)
+- [ ] ≥88% exact-match Jaccard on 20 real held-out val clips
+- [ ] ≥85% on unseen row/column combinations (generalisation)
+- [ ] <500ms per sample on GPU (batch of 10)
+- [ ] Explicit dispense type classification (single / full-row / full-col)
+- [ ] Reproducible (git-tracked, seeded)
 
 ---
 
-## Comparison Table (Updated April 2026)
+## Design Principles
 
-| Criterion | Classical CV | **DL (DINOv2 + LoRA + Temporal)** | 3DGS | Hybrid (DL+CV) | Acoustic-Visual |
-|-----------|--------------|-----------------|------|---|---|
-| **Accuracy (est.)** | 80–90% | **88–96%** | 95–99% | 92–97% | 92–98% |
-| **Interpretability** | High | Medium | Very High | Medium–High | Medium |
-| **Training data** | None | 100 + synthetic | 100 + calibration | 100 | 100 + audio |
-| **Inference latency (batch)** | 1.6–3.1s | **~0.3–0.5s** | 10–60 min | 1.5–3s | 0.4–0.6s |
-| **Backbone (PRIMARY)** | OpenCV | **DINOv2-ViT-B/14 + LoRA** (NOT ResNet-18) | NeRF-based | DINOv2 | DINOv2 |
-| **Fusion strategy** | N/A | **Late (geometric)** | N/A | **Late (geometric)** | **Late (geometric)** |
-| **Handles glare?** | No | Partially | **Yes** | Partially | Partially |
-| **GPU required?** | No | **Yes** | **Yes** | Yes (optional) | **Yes** |
-| **20-min batch budget?** | **Yes** | **Yes** | No | **Yes** | **Yes** |
-| **Status** | Fallback | **✅ PRIMARY (implemented)** | Research | Fallback | Secondary |
-| **Recommended?** | If <80% acc | **YES (production)** | No | If <88% | **YES (reliable)** |
+1. **Late fusion is geometrically mandated** — FPV (perspective) and top-view (orthographic) must be encoded separately. Early fusion is forbidden everywhere in this codebase.
+2. **Temporal modeling is mandatory** — "dispense" is a causal event (entrance → insertion → release). Single-frame models cannot detect it.
+3. **Foundation models + LoRA for N=100** — full fine-tuning of any backbone on 100 samples leads to severe overfitting. Parameter-efficient tuning (LoRA) is the only viable path.
+4. **Factorised outputs** — row/column/type heads avoid the 96-class combinatorial problem and generalise to unseen combinations.
 
 ---
 
-## Why ResNet-18 is Deprecated (Critical Justification)
+## Alternatives Considered
 
-**Critical Analysis:** ResNet-18 (2015) requires 100% fine-tuning on task-specific data, memorizing background, lighting, and well-plate orientation instead of learning generalizable geometric features. This results in severe overfitting on N=100 samples.
+The following architectures were evaluated and rejected or deferred. Each is documented briefly; the primary reason for not selecting it is given.
 
-| Aspect | ResNet-18 (Deprecated) | DINOv2-ViT-B/14 (Current) |
-|--------|---|---|
-| **Release year** | 2015 | 2023 |
-| **Pre-training data** | ImageNet (1.2M supervised) | 142M unlabeled (self-supervised) |
-| **Pre-training method** | Supervised classification | Self-supervised DINO (contrastive) |
-| **Few-shot capability** | Poor (requires full fine-tuning) | **Excellent (LoRA sufficient)** |
-| **Overfitting risk on N=100** | Very high | **Reduced dramatically** |
-| **Spatial representation** | Mid-level conv features (3×3 receptive field at layer 2) | **Explicit patch embeddings (14×14 grid = 196 tokens)** |
-| **Fine-tuning parameters** | 11M (all trained) | **1M (LoRA only, ~1%)** |
-| **Latency per frame** | ~50ms | ~80ms |
-| **Status 2026** | DEPRECATED (superseded) | **SOTA (state-of-the-art)** |
-| **Expected accuracy gain over ResNet-18** | Baseline | **+5–15%** |
+### A. Classical Computer Vision + Geometric Pipeline
 
-**Migration path:** If legacy code uses ResNet-18, replace layers 1–4 with DINOv2; keep downstream fusion + head architecture identical.
+**Approach:** Edge detection → homography → well grid overlay → blob/optical flow pipette tip detection → late fusion via geometric triangulation.
+
+**Strengths:** No training data required; fully interpretable; fast (1–5 s).
+
+**Why not selected:** Fragile to lighting variation, glare on polystyrene, and occlusion. Temporal reasoning (distinguishing dispense from approach/retract) requires explicit optical flow engineering. Calibration overhead. Retained as **fallback** if DL approach fails.
 
 ---
 
-## Inference SLA
+### B. 3D Gaussian Splatting (3DGS)
 
-**CRITICAL CORRECTION FROM PREVIOUS DOCUMENTATION:**
+**Approach:** Reconstruct 3D scene geometry from dual-view video; track pipette tip in reconstructed space.
 
-Previous documentation stated "2 min/sample" or "120 seconds per sample", which was an **incorrect derived average** from an assumed small batch size.
+**Strengths:** Physically accurate; immune to glare and refraction; generalises across cameras.
 
-**Inference SLA:** <2 min per dual-view sample (20 min total for ~10 samples).
+**Why not selected:** 10–60 min per sample reconstruction time — exceeds the 20-min batch budget by 30–180×. Requires camera calibration (~1 hr one-time). SfM fragile on featureless well plates. Appropriate for offline research validation only.
 
-### Implications
+---
 
-This correction is **CRITICAL** because it:
+### C. Hybrid (Geometry + Foundation Model)
 
-1. **FAVORS foundation models:** DINOv2 (slower per-frame but better quality) is now favorable when latency amortized over batch
-2. **ENABLES better accuracy:** Foundation models + temporal attention now justified by latency budget
-3. **IMPROVES throughput:** Batch processing (3–5 sec for 10) is more efficient than sequential
-4. **LIFTS artificial constraint:** Heavier models no longer penalized
+**Approach:** Classical CV provides a spatial prior ("tip near A5") combined with DINOv2 learned features as a refinement. Late fusion: `α × prior_logits + (1−α) × learned_logits`.
 
-### Budget Breakdown (Batch of 10)
+**Strengths:** Geometry provides signal when vision fails; interpretable fallback path.
 
-- Video I/O + preprocessing: ~500ms (amortized across batch)
-- DINOv2 + LoRA backbone (8 frames × 10 samples): ~150ms total
-- Temporal Transformer attention: ~100ms total
-- Late fusion (cross-attention): ~10ms
-- Output head (Sequence-to-Label): ~20ms
-- **Subtotal:** ~780ms
-- Overhead (serialization, logging): ~50–100ms
-- **Grand total:** ~0.9–2 seconds for entire batch of 10
+**Why not selected:** Implementation complexity doubles without clear accuracy gain over pure Architecture 2. Hyperparameter `α` requires additional tuning. Selected as **fallback** if DINOv2+temporal reaches <88% validation accuracy.
 
-**Headroom:** 20 min − 2 sec ≈ 19 min 58 sec remaining for validation, error analysis, logging, deployment overhead.
+---
+
+### D. Acoustic-Visual Fusion
+
+**Approach:** Add an acoustic modality (MFCC + 1D CNN) as a verification layer. Audio confirms dispense event timing; vision predicts which well.
+
+**Strengths:** Robust to visual occlusion; precise temporal anchor; multimodal graceful degradation.
+
+**Why not selected (yet):** Audio capture not confirmed available in all deployment environments. Silent electronic pipettes break the acoustic signal. Adds ~150ms latency. Deferred to Phase 2b — evaluate after visual-only baseline is validated.
+
+**Design (for future reference):**
+```
+[Audio] → MFCC(13 coeff, 25ms window) → Conv1D(32→64→128) → p_dispense
+IF dispense_detected AND visual_conf > threshold → output prediction (HIGH CONFIDENCE)
+ELIF dispense_detected AND visual_conf < threshold → output with uncertainty flag
+ELIF NOT dispense_detected → {"uncertain": true, "reason": "no_acoustic_dispense"}
+```
+
+---
+
+### E. VideoMAE
+
+**Approach:** Replace DINOv2 spatial backbone with VideoMAE (Kinetics-400 pre-trained) for native video understanding.
+
+**Why not selected:** VideoMAE processes fixed-length video clips and requires temporal fine-tuning data. At N=100, domain gap from action-recognition pre-training (Kinetics) to lab-bench dispense events is likely larger than DINOv2's spatial domain gap. Deferred as future enhancement once data volume grows.
+
+---
+
+### Why Not ResNet-18
+
+| Aspect | ResNet-18 | DINOv2-ViT-B/14 |
+|--------|-----------|-----------------|
+| Pre-training | ImageNet 1.2M supervised | 142M self-supervised (DINO) |
+| Few-shot capability | Poor — full fine-tuning required | Excellent — LoRA sufficient |
+| Overfitting risk on N=100 | Very high | Reduced dramatically |
+| Spatial representation | 3×3 conv receptive fields | 14×14 explicit patch embeddings |
+| Trainable params | 11M (100%) | ~12M (~14%, LoRA only) |
+| Expected accuracy (N=100) | 50–60% | 88–96% (est.) |
+
+ResNet-18 support was removed in commit d5b8f04.
+
+---
+
+## Architecture Comparison
+
+| | Classical CV | **DINOv2 + LoRA** | 3DGS | Hybrid | Acoustic-Visual |
+|---|---|---|---|---|---|
+| Accuracy (est.) | 80–90% | **88–96%** | 95–99% | 92–97% | 92–98% |
+| Training data | None | 100 + synthetic | 100 + calibration | 100 | 100 + audio labels |
+| Latency (batch 10) | 1.6–3s | **~1s** | 10–60 min | 1.5–3s | ~1.2s |
+| GPU required | No | Yes | Yes | Optional | Yes |
+| Meets latency budget | Yes | **Yes** | **No** | Yes | Yes |
+| Status | Fallback | **✅ Implemented** | Research only | Fallback | Deferred |
 
 ---
 
 ## Implementation Roadmap
 
-### Phase 1: Data Preparation & Synthetic Generation (Week 1)
+### Phase 1 — Data & Baseline (complete)
+- [x] Video loading + preprocessing pipeline
+- [x] Synthetic data generation (700 clips)
+- [x] Leak-free real/synthetic split
+- [x] DINOv2 + LoRA + Temporal Transformer + Late Fusion implemented
+- [x] Training loop with AMP, focal loss, well-consistency loss, type head
 
-- [ ] Data loading & preprocessing pipeline (video + audio)
-- [ ] Class balance analysis: which wells appear <3 times?
-- [ ] Synthetic data generation (Stable Video Diffusion or template-based)
-  - Target: 5–10× synthetic clips per undersampled well
-  - Total target: 500–1000 synthetic clips
-- [ ] Dataset split: 80/20 train/val on (100 real + 500–1000 synthetic)
-- [ ] Quality check: visual inspection + FID score
+### Phase 2 — Validation & Tuning (in progress)
+- [ ] Val Jaccard ≥ 0.50 on real held-out clips
+- [ ] Hyperparameter sweep (weight_decay, dropout, lora_rank)
+- [ ] Diagnose synthetic→real distribution gap (v12: real-only run)
+- [ ] Decision gate: ≥88% accuracy → Phase 3; else Phase 2b
 
-### Phase 2: Baseline Temporal Model with DINOv2 (Week 2)
+### Phase 2b — Fallback (if needed)
+- [ ] Classical CV spatial prior (Architecture A)
+- [ ] Acoustic verification (Architecture D) if audio confirmed available
 
-- [ ] Download DINOv2-ViT-B/14 pre-trained weights
-- [ ] Implement Architecture 2 (DINOv2 + LoRA + Temporal Transformer + Late Fusion + Sequence-to-Label)
-- [ ] LoRA adapters (rank r=8) on Q, V projections
-- [ ] Training loop: transfer learning + aggressive augmentation
-- [ ] Validation evaluation
-- [ ] **Decision gate:** Accuracy ≥88%?
-  - YES → Proceed to Phase 3
-  - NO → Proceed to Phase 2b
-
-### Phase 2b: Hybrid or Acoustic-Visual (if needed)
-
-- [ ] Classical CV module (plate detection + optical flow) OR acoustic detector
-- [ ] Late fusion blending: prior + learned logits
-- [ ] Re-evaluate: accuracy ≥88%?
-
-### Phase 3: Optimization & Error Analysis (Week 3)
-
-- [ ] Hyperparameter sweep (lr, weight decay, augmentation, fusion α)
-- [ ] Error analysis: which wells misclassified? Systematic bias?
-- [ ] Temporal event detection validation
+### Phase 3 — Optimisation
+- [ ] Error analysis: which wells misclassified?
 - [ ] Confidence calibration (temperature scaling)
 - [ ] Target: ≥92% on validation
 
-### Phase 4: Integration & Testing (Week 4)
-
-- [ ] CLI integration
-- [ ] Test on 10 held-out real samples (no synthetic)
-- [ ] Latency profiling; verify <500ms per sample (batch of 10 = <5 sec)
-- [ ] Docker containerization
+### Phase 4 — Integration & Deployment
+- [ ] CLI integration + batch inference
+- [ ] Latency profiling (verify <500ms/sample)
+- [ ] Docker containerisation
 - [ ] Documentation + deployment guide
-
-### Phase 5: Fallback / Research (Week 5+, if needed)
-
-- [ ] Hybrid (Architecture 4) if Phase 4 test accuracy <88%
-- [ ] 3DGS (Architecture 3) if error dominated by glare/refraction
-- [ ] Publication on Physical AI for lab automation
 
 ---
 
 ## Technical Debt & Future Work
 
-1. **Uncertainty quantification:** Monte-Carlo dropout or ensembles for per-well confidence; "abstain" when uncertain
-2. **Active learning:** Uncertainty sampling to prioritize new labels
-3. **Temporal event grounding:** Predict dispense timestamp (frame index) with confidence
-4. **Plate format generalization:** Grid-agnostic decoder for 384/1536-well plates
-5. **Monocular depth:** MiDaS as lightweight 3D alternative to full 3DGS
-6. **Online learning:** Domain adaptation in production on misclassified samples
-7. **Acoustic robustness:** Noise-robust acoustic models for high-ambient-noise labs
-8. **Edge deployment:** Quantize DINOv2 + Temporal Transformer for NVIDIA Jetson
-
----
-
-## Conclusion
-
-**PRIMARY RECOMMENDATION (IMPLEMENTED):** Architecture 2 — **DINOv2-ViT-B/14 + LoRA + Temporal Transformer + Late Fusion**
-- **Status:** Already implemented in code (src/models/backbone.py, src/models/fusion.py)
-- Achieves 88–96% accuracy on held-out test set
-- <300ms latency per sample (batch of 10 ~3–5 sec total)
-- Robust to variation (lighting, occlusion, tilt)
-- Geometrically sound (late fusion mandated)
-- Few-shot capable with DINOv2 + synthetic data
-- **NOTE:** Earlier documents incorrectly said "VideoMAE primary"—that was a documentation error. DINOv2 is the actual implementation.
-
-**SECONDARY RECOMMENDATION:** Architecture 5 (Acoustic-Visual Fusion) for high-reliability production with audio available
-- Multimodal robustness
-- Graceful degradation if vision fails
-- Expected 92–98% accuracy
-
-**RESEARCH PATH:** Architecture 3 (3DGS) for offline validation and glare/refraction-dominated failures
-
-**FALLBACK:** Hybrid (Architecture 4) only if DINOv2+temporal underperforms (<88% on validation)
-
-**NON-NEGOTIABLE CONSTRAINTS:**
-- **Late fusion everywhere** (geometrically mandated, not optional)
-- **DINOv2-ViT-B/14 + LoRA is the only backbone path** (ResNet-18 fallback was removed in commit d5b8f04; the "Why ResNet-18 is Deprecated" section below remains as comparative justification)
-- **Temporal Transformer mandatory** (single-frame models insufficient)
-- Synthetic data generation (scale beyond N=100)
-- 20-minute TOTAL batch budget 
-- ≥88% accuracy on validation
-- Uncertainty quantification (reproducibility over overconfidence)
-
-**Success Criteria:**
-- [ ] ≥88% accuracy on held-out test set (10 real samples)
-- [ ] <500ms per sample on GPU (batch of 10 = <5 sec total)
-- [ ] ≥85% accuracy on unseen row/column combinations (generalization)
-- [ ] Explicit dispense event detection (temporal localization)
-- [ ] Reproducible results (git-tracked, seeded, calibrated confidence)
-- [ ] Failure mode analysis documented (glare/occlusion/tilt robustness)
-- [ ] Architectural justification provided (this document)
+1. **Uncertainty quantification** — Monte-Carlo dropout or ensembles; "abstain" when uncertain
+2. **Temporal event grounding** — predict dispense timestamp (frame index) with confidence
+3. **Plate format generalisation** — grid-agnostic decoder for 384/1536-well plates
+4. **Monocular depth** — MiDaS as lightweight 3D alternative to full 3DGS
+5. **Online learning** — domain adaptation in production on misclassified samples
+6. **Acoustic robustness** — noise-robust acoustic models for high-ambient-noise labs
+7. **Edge deployment** — quantise DINOv2 + Temporal Transformer for NVIDIA Jetson
+8. **VideoMAE backbone** — evaluate once training data exceeds ~500 real clips
