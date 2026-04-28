@@ -9,7 +9,7 @@ graph TD
     %% Feature Extraction — each view encoded independently in its native frame
     subgraph FeatureExtraction ["Feature Extraction (per view, independent)"]
         DINO_TV[DINOv2-ViT-B/14 frozen<br/>+ LoRA adapters rank=4<br/>img_size=448 → 1024 patches × 768d]
-        DINO_FPV[DINOv2-ViT-B/14 frozen<br/>+ LoRA adapters rank=4<br/>img_size=448 → 1024 patches × 768d<br/><i>shared weights with top-view</i>]
+        DINO_FPV[DINOv2-ViT-B/14 frozen<br/>+ LoRA adapters rank=4<br/>img_size=448 → 1024 patches × 768d<br/>shared weights with top-view]
     end
 
     %% Temporal processing — per view
@@ -66,7 +66,7 @@ graph TD
     DECODE -.-> |low confidence| REFUSAL
 
     %% ── Future: Scene Classifier (proposed, not implemented) ──────────────
-    subgraph SceneClassifier ["⬡ FUTURE: Scene Classifier (not implemented)"]
+    subgraph SceneClassifier ["[ FUTURE ] Scene Classifier — not implemented"]
         SC_HEAD[Scene Classification Heads<br/>well state · tip state · liquid · hands<br/>multi-label per P0/P1 object class]
         SC_OUT((Scene Annotations<br/>structured JSON per frame))
     end
@@ -82,8 +82,8 @@ graph TD
     classDef output_pass fill:#c6f6d5,stroke:#38a169,stroke-width:2px,color:#22543d
     classDef output_fail fill:#fed7d7,stroke:#e53e3e,stroke-width:2px,color:#742a2a
 
-    %% Styling — future / proposed (dashed border, muted grey)
-    classDef future fill:#f7fafc,stroke:#a0aec0,stroke-width:2px,stroke-dasharray:6 4,color:#4a5568
+    %% Styling — future / proposed (light fill + thin grey border to distinguish from implemented)
+    classDef future fill:#f0f4f8,stroke:#a0aec0,stroke-width:1px,color:#718096
 
     class TV,FPV input
     class DINO_TV,DINO_FPV,TEMP_TV,TEMP_FPV model
