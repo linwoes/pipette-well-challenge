@@ -136,6 +136,71 @@ Headroom: ~19 min 59s.
 
 ---
 
+## Future: Scene Classifier
+
+> **Status: Proposed — not implemented.** Full specification in [FEATURE_SCENE_CLASSIFICATION.md](FEATURE_SCENE_CLASSIFICATION.md).
+
+The current architecture answers one question: *which wells were dispensed into?* The Scene Classifier extends the system to answer: *what objects are present and in what state?* — enabling downstream consumers to correlate scene context (tip integrity, liquid visibility, operator hand position) with dispense outcomes.
+
+### Integration Point
+
+The Scene Classifier branches from the **Fusion MLP output** (the shared 256-dimensional representation), adding a set of multi-label classification heads without touching the existing row/col/type pipeline:
+
+```
+Fusion MLP output (256d)
+    │
+    ├──> Row head (existing)
+    ├──> Col head (existing)
+    ├──> Type head (existing)
+    │
+    └──> Scene Classification heads (future)
+             ├── Well state head    (empty / liquid_filled / foam / …)
+             ├── Tip state head     (clean / contaminated / cracked / liquid_filled / …)
+             ├── Liquid head        (presence + location: in_tip / in_well / spill / …)
+             └── Operator hand head (presence + glove state + proximity)
+```
+
+Branching from the fused 256d representation means the scene heads share the visual features learned for well detection — the backbone and fusion MLP are not duplicated. In multi-task learning terms, the scene loss acts as an auxiliary regulariser that may also improve well-prediction generalisation.
+
+### Object Taxonomy (priority order)
+
+| Priority | Object | Key attributes |
+|----------|--------|---------------|
+| P0 | Well / plate | state (empty/filled/foam), plate orientation, boundary visible |
+| P0 | Pipette tip | channel type, tip state (clean/cracked/liquid-filled), position (approaching/in-well/ejected) |
+| P1 | Liquid | presence, location (in-tip/in-well/spill), colour |
+| P1 | Operator hand | presence, glove state, proximity to well |
+| P2 | Pipette barrel | type (single/8/12-channel), plunger state |
+| P2 | Plate lid | presence, position (on/off) |
+
+### Output Schema (per clip)
+
+```json
+{
+  "scene_classifications": [
+    {
+      "frame_idx": 4,
+      "well_state": "liquid_filled",
+      "tip_state": "liquid_filled",
+      "tip_position": "in_well",
+      "liquid_present": true,
+      "liquid_location": "in_tip",
+      "hand_present": false
+    }
+  ]
+}
+```
+
+### Why Not Now
+
+1. **Annotation cost** — scene labels require per-frame annotation of multiple objects; the current 100-clip dataset has no scene labels.
+2. **Validation first** — the well-detection task itself has not yet reached ≥88% val Jaccard. Adding auxiliary tasks before the primary task is validated adds risk.
+3. **Data volume** — multi-label scene classification benefits from larger datasets; N=100 is marginal.
+
+**Trigger for implementation:** Primary task reaches ≥88% val Jaccard AND scene annotation tooling is available (see [DESIGN_VISUALIZATION_TOOL.md](DESIGN_VISUALIZATION_TOOL.md) for the planned annotation UI).
+
+---
+
 ## Alternatives Considered
 
 The following architectures were evaluated and rejected or deferred. Each is documented briefly; the primary reason for not selecting it is given.
