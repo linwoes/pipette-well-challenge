@@ -885,7 +885,7 @@ for epoch in range(50):
 | **Batch size** | 32 | Synthetic + real mixed; stratified by well |
 | **Epochs** | 50 | Limited by N=100; early stopping on validation ECE |
 | **Data composition** | 100 real + synthetic | 50% VideoMAE + 50% simulated |
-| **Input resolution** | 448×448 recommended | Position embeddings compressed 5.3× at 224; 448 gives 32×32=1024 patches for more fine-grained spatial representation |
+| **Input resolution** | 518×518 recommended | Position embeddings compressed 5.3× at 224; 518 gives 37×37=1369 patches at Meta's recommended ViT-B/14 resolution |
 
 ---
 

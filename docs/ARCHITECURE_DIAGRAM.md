@@ -6,8 +6,8 @@ graph TD
     end
 
     subgraph FeatureExtraction ["Feature Extraction - per view independently"]
-        DINO_TV[DINOv2-ViT-B/14 frozen + LoRA rank=4<br/>img_size=448, 1024 patches x 768d]
-        DINO_FPV[DINOv2-ViT-B/14 frozen + LoRA rank=4<br/>img_size=448, 1024 patches x 768d<br/>shared weights with top-view]
+        DINO_TV[DINOv2-ViT-B/14 frozen + LoRA rank=4<br/>img_size=518, 1369 patches x 768d]
+        DINO_FPV[DINOv2-ViT-B/14 frozen + LoRA rank=4<br/>img_size=518, 1369 patches x 768d<br/>shared weights with top-view]
     end
 
     subgraph TemporalProcessing ["Temporal Modeling - per view"]

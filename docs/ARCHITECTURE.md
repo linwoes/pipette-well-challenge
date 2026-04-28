@@ -18,14 +18,14 @@ Three constraints dominate the problem:
 2. **Dual-view geometric incompatibility** — FPV uses perspective projection (depth-dependent pixel position); top-view uses orthographic (depth-independent). Early fusion conflates incompatible coordinate systems. Late fusion is geometrically mandated, not a preference.
 3. **"Dispense" is a temporal event** — tip enters well, stays, leaves. Single-frame models cannot distinguish these phases. A temporal transformer over sampled frames is required.
 
-DINOv2's self-supervised pre-training on 142M images gives spatial patch embeddings that transfer to novel domains with minimal fine-tuning. At img_size=448, the backbone produces 32×32=1024 patches at 14px each — sufficient resolution to distinguish individual wells in the 8×12 grid.
+DINOv2's self-supervised pre-training on 142M images gives spatial patch embeddings that transfer to novel domains with minimal fine-tuning. At img_size=518, the backbone produces 37×37=1369 patches at 14px each — sufficient resolution to distinguish individual wells in the 8×12 grid. 518px is Meta's recommended inference resolution for ViT-B/14.
 
 ---
 
 ### Data Flow
 
 ```
-[FPV Video]      → Sample 8 frames → [B×N, 3, 448, 448]
+[FPV Video]      → Sample 8 frames → [B×N, 3, 518, 518]
                                     → DINOv2-ViT-B/14 (frozen) + LoRA adapters
                                     → [B×N, 768]
                                     → reshape → [B, N, 768]
@@ -76,8 +76,8 @@ Late fusion:    encode each view in its native frame
 
 Early fusion is explicitly forbidden.
 
-#### Image Resolution: 448px
-At 224px, DINOv2's position embeddings are compressed 5.3×, reducing spatial resolution per well. At 448px, 32×32=1024 patches provide adequate well-level granularity. The memory cost (~14 GB training on T4) is acceptable at batch size 2.
+#### Image Resolution: 518px
+At 224px, DINOv2's position embeddings are compressed 5.3×, reducing spatial resolution per well. At 518px (37×37=1369 patches), the backbone operates at Meta's recommended resolution for ViT-B/14, maximising spatial granularity for well-level discrimination. 448px (32×32=1024 patches) was used in v4–v12 and remains a valid option when VRAM is constrained.
 
 ---
 
@@ -87,9 +87,9 @@ At 224px, DINOv2's position embeddings are compressed 5.3×, reducing spatial re
 |-----------|-------|-------|
 | Backbone | DINOv2-ViT-B/14 | Frozen; LoRA on Q, V projections |
 | LoRA rank | 4 | ~12M trainable params total |
-| img_size | 448 | 32×32=1024 patches |
+| img_size | 518 | 37×37=1369 patches; Meta-recommended for ViT-B/14 |
 | Frames | 8 | Uniformly sampled per clip |
-| Batch size | 2 | T4 VRAM limit with 448px + backward pass |
+| Batch size | 2 | T4 VRAM limit with 518px + backward pass |
 | Optimizer | AdamW | lr=1e-4, weight_decay=1e-3 |
 | LR schedule | Warmup (5 ep) + cosine annealing | |
 | Loss | Weighted BCE + well-consistency | focal_gamma=0, col_weight=2.0 |

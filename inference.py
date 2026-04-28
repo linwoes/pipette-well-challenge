@@ -9,7 +9,7 @@ Usage:
   python inference.py --fpv path/to/fpv.mp4 --topview path/to/topview.mp4 --output result.json
   python inference.py --fpv fpv.mp4 --topview top.mp4  # writes to stdout if no --output
   python inference.py --fpv fpv.mp4 --topview top.mp4 --model checkpoints/best.pt --threshold 0.4
-  python inference.py --fpv fpv.mp4 --topview top.mp4 --img_size 448
+  python inference.py --fpv fpv.mp4 --topview top.mp4 --img_size 518
 
 The model architecture is DualViewFusion, which internally manages the DINOv2
 backbone, temporal attention, and factorised row/column heads. Checkpoints saved
@@ -56,7 +56,7 @@ class PipetteWellDetector:
         model_checkpoint: Optional[str] = None,
         threshold: float = 0.4,
         device: Optional[str] = None,
-        img_size: int = 448,
+        img_size: int = 518,
     ):
         """
         Initialize the detector.
@@ -398,8 +398,8 @@ def main():
     parser.add_argument('--output', type=str, default=None, help='Output JSON file (default: stdout)')
     parser.add_argument('--model', type=str, default=None, help='Model checkpoint path')
     parser.add_argument('--threshold', type=float, default=0.4, help='Fallback confidence threshold (default 0.4)')
-    parser.add_argument('--img_size', type=int, default=448,
-                        help='Input image size (must be multiple of 14; default 448)')
+    parser.add_argument('--img_size', type=int, default=518,
+                        help='Input image size (must be multiple of 14; default 518)')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose logging')
 
     args = parser.parse_args()

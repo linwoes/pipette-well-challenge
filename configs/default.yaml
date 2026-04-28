@@ -10,8 +10,8 @@ model:
   backbone: "dinov2"         # DINOv2-ViT-B/14 via timm (use "resnet18" for CPU debug runs)
   pretrained: true
   # DINOv2 ViT-B/14: must be multiple of patch_size=14
-  # Valid: 224 (16×14), 336 (24×14), 448 (32×14 — used in v4+), 518 (37×14, Meta-recommended)
-  input_size: [448, 448]     # matches training_v4 (img_size=448)
+  # Valid: 224 (16×14), 336 (24×14), 448 (32×14), 518 (37×14, Meta-recommended)
+  input_size: [518, 518]     # 37x14 patches — Meta-recommended resolution for ViT-B/14
   num_rows: 8                # Rows A–H
   num_columns: 12            # Columns 1–12
   use_lora: true
@@ -54,7 +54,7 @@ inference:
 # Video Processing
 video:
   target_fps: 30
-  frame_resize: [448, 448]   # must match model.input_size
+  frame_resize: [518, 518]   # must match model.input_size
   format: "mp4"
 
 # Augmentation Configuration (for training only)

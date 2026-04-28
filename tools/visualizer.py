@@ -549,7 +549,7 @@ def _load_model_for_embed(ckpt_path: Path):
         use_lora=cfg.get('use_lora', True),
         lora_rank=cfg.get('lora_rank', 4),
         temporal_layers=cfg.get('temporal_layers', 1),
-        img_size=cfg.get('img_size', 448),
+        img_size=cfg.get('img_size', 518),
     )
     model.load_state_dict(state_dict)
     model.eval()
@@ -565,7 +565,7 @@ def _run_embed_inference(
     top_path: Path,
     model,
     has_type_head: bool,
-    img_size: int = 448,
+    img_size: int = 518,
     n_frames: int = 4,
 ) -> Dict:
     """Run model inference once and return probs + predictions."""
@@ -845,7 +845,7 @@ def cmd_embed(args):
 
     logger.info(f"Loading model from {ckpt_path} ...")
     model, has_type_head, cfg = _load_model_for_embed(ckpt_path)
-    img_size = cfg.get('img_size', 448)
+    img_size = cfg.get('img_size', 518)
 
     video_dirs = [Path(d) for d in args.video_dirs] if args.video_dirs else []
     default_data = PROJECT_ROOT / "data" / "pipette_well_dataset"

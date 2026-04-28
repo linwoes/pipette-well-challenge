@@ -19,7 +19,7 @@ model = DualViewFusion(
     use_lora=cfg.get('use_lora', True),
     lora_rank=cfg.get('lora_rank', 4),
     temporal_layers=cfg.get('temporal_layers', 1),
-    img_size=cfg.get('img_size', 448),
+    img_size=cfg.get('img_size', 518),
 )
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
@@ -34,7 +34,7 @@ std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 def preprocess(path, n=4):
     frames = load_video(path, max_frames=n)
-    proc = np.array([preprocess_frame(f, size=(448, 448)) for f in frames])
+    proc = np.array([preprocess_frame(f, size=(518, 518)) for f in frames])
     proc = (proc - mean) / std
     t = torch.from_numpy(proc.transpose(0,3,1,2)).float()
     return t.unsqueeze(0)
