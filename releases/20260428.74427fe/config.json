@@ -1,0 +1,36 @@
+{
+  "version": "20260428.74427fe",
+  "packaged_at": "2026-04-28T19:24:47.947987+00:00",
+  "git": {
+    "hash": "74427fe3abfd1224b23d108f7c7dfd83e29ff7ff",
+    "short_hash": "74427fe",
+    "branch": "main",
+    "commit_message": "feat: enable synthetic data by default (USE_SYNTHETIC=1)",
+    "commit_date": "2026-04-28T12:59:48-04:00",
+    "dirty": true
+  },
+  "checkpoint": {
+    "epoch": 3,
+    "metrics": {
+      "jaccard": 0.0,
+      "val_loss": 0.4992016464471817,
+      "exact_match": 0.0,
+      "cardinality_acc": 1.0
+    },
+    "model_config": {
+      "num_rows": 8,
+      "num_columns": 12,
+      "shared_backbone": true,
+      "use_lora": true,
+      "lora_rank": 4,
+      "temporal_layers": 1,
+      "img_size": 448
+    }
+  },
+  "notes": "518 run, epoch 43, val_loss Y",
+  "inference": {
+    "command": "python inference.py --model releases/20260428.74427fe/model.pt --fpv <fpv.mp4> --topview <top.mp4>",
+    "threshold": 0.4,
+    "img_size": 448
+  }
+}
