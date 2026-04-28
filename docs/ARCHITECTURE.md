@@ -158,6 +158,24 @@ Fusion MLP output (256d)
              ├── Tip state head     (clean / contaminated / cracked / liquid_filled / …)
              ├── Liquid head        (presence + location: in_tip / in_well / spill / …)
              └── Operator hand head (presence + glove state + proximity)
+                                          │
+                                          └──> Safety gate ──> suppress row/col predictions
+```
+
+### Why This Placement
+
+**Zero latency impact.** DINOv2 and the Fusion MLP are the dominant cost: ~150ms and ~30ms respectively (see latency table above). Adding a small set of linear heads at the 256d bottleneck adds negligible compute — well within the <300ms per-sample inference budget. The scene heads are not a separate forward pass; they share the same activations already computed for the well-detection heads.
+
+**Multimodal consistency.** The 256d representation is the product of both views fused through the same MLP. Branching here means the scene classifier's understanding of the scene is grounded in the same visual features that drive the coordinate predictions. A separate backbone or earlier branch would use a different internal representation, breaking this alignment and requiring independent training.
+
+**Safety gating.** The scene classifier output can act as a reliability filter on the well predictions. If the classifier detects `hand_present=True` with high confidence, the row/col outputs for that sample can be suppressed (or flagged for human review) on the grounds that the dispense view was occluded. This gating costs zero additional inference time — the scene heads run in parallel with the well heads from the shared activations.
+
+```
+Scene heads output
+    │
+    ├── hand_present=True (high confidence) ──> suppress row/col, flag REFUSAL
+    ├── tip_state=cracked                   ──> flag WARNING in output JSON
+    └── well_state=foam                     ──> flag WARNING in output JSON
 ```
 
 Branching from the fused 256d representation means the scene heads share the visual features learned for well detection — the backbone and fusion MLP are not duplicated. In multi-task learning terms, the scene loss acts as an auxiliary regulariser that may also improve well-prediction generalisation.
