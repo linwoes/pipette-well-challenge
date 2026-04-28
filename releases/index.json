@@ -1,5 +1,19 @@
 [
   {
+    "version": "20260428.74427fe",
+    "packaged_at": "2026-04-28T19:24:47.947987+00:00",
+    "git_hash": "74427fe",
+    "epoch": 3,
+    "metrics": {
+      "jaccard": 0.0,
+      "val_loss": 0.4992016464471817,
+      "exact_match": 0.0,
+      "cardinality_acc": 1.0
+    },
+    "deployed": true,
+    "notes": "518 run, epoch 43, val_loss Y"
+  },
+  {
     "version": "20260425.edb3173",
     "packaged_at": "2026-04-25T19:36:43.080499+00:00",
     "git_hash": "edb3173",
@@ -10,6 +24,7 @@
       "exact_match": 0.0,
       "cardinality_acc": 0.3
     },
-    "notes": "v9 epoch-5 baseline; Jaccard 0.06 \u2014 model in early spatial learning phase, used as resume seed for v10 hybrid-criterion training."
+    "notes": "v9 epoch-5 baseline; Jaccard 0.06 \u2014 model in early spatial learning phase, used as resume seed for v10 hybrid-criterion training.",
+    "deployed": false
   }
 ]
