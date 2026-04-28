@@ -68,10 +68,13 @@ PATIENCE="${PATIENCE:-20}"                      # F-3: was 10
 WELL_CONSISTENCY_WEIGHT="${WELL_CONSISTENCY_WEIGHT:-0.2}"  # F-4: was 0.5
 FOCAL_GAMMA="${FOCAL_GAMMA:-0.0}"              # v6: plain weighted BCE (was 2.0 focal)
 COL_WEIGHT="${COL_WEIGHT:-2.0}"                # v6: upweight column head
-LORA_RANK="${LORA_RANK:-4}"                    # v6: was 8
+LORA_RANK="${LORA_RANK:-2}"                    # v13: 4→2, fewer params to reduce overfitting
 TEMPORAL_LAYERS="${TEMPORAL_LAYERS:-1}"        # v6: was 2
 TYPE_LOSS_WEIGHT="${TYPE_LOSS_WEIGHT:-1.0}"    # v8: clip-type head weight
-WEIGHT_DECAY="${WEIGHT_DECAY:-1e-3}"           # v12: 10× increase (was 1e-4) to combat overfitting
+WEIGHT_DECAY="${WEIGHT_DECAY:-1e-2}"           # v13: 10× increase (was 1e-3) to combat overfitting
+DROPOUT="${DROPOUT:-0.5}"                      # v13: fusion MLP + temporal attention dropout (was 0.3)
+NUM_FOLDS="${NUM_FOLDS:-5}"                    # v13: K-fold CV number of folds
+FOLD_INDEX="${FOLD_INDEX:-0}"                  # v13: which fold to hold out as validation
 
 # RESUME from v9 best.pt — same architecture, compatible checkpoint
 
@@ -86,7 +89,8 @@ echo "  IMG_SIZE       : ${IMG_SIZE}  FRAMES: ${NUM_FRAMES}  BATCH: ${BATCH_SIZE
 echo "  FOCAL_GAMMA    : ${FOCAL_GAMMA}  COL_WEIGHT: ${COL_WEIGHT}"
 echo "  LORA_RANK      : ${LORA_RANK}  TEMPORAL_LAYERS: ${TEMPORAL_LAYERS}"
 echo "  TYPE_LOSS_WEIGHT: ${TYPE_LOSS_WEIGHT}"
-echo "  WEIGHT_DECAY   : ${WEIGHT_DECAY}"
+echo "  WEIGHT_DECAY   : ${WEIGHT_DECAY}  DROPOUT: ${DROPOUT}"
+echo "  KFOLD          : ${NUM_FOLDS}  FOLD: ${FOLD_INDEX}"
 echo "  RESUME         : ${RESUME:-none}"
 
 # Synthetic data uses a leak-free split (real-only val, real+synth-of-train).
@@ -119,6 +123,9 @@ fi
   --temporal_layers         "${TEMPORAL_LAYERS}" \
   --type_loss_weight        "${TYPE_LOSS_WEIGHT}" \
   --weight_decay            "${WEIGHT_DECAY}" \
+  --dropout                 "${DROPOUT}" \
+  --kfold                   "${NUM_FOLDS}" \
+  --fold                    "${FOLD_INDEX}" \
   ${SYNTHETIC_ARG} \
   ${RESUME:+--resume "${RESUME}"} \
   2>&1 | tee "${TRAINING_OUTPUT_DIR}/training_${TRAINING_VERS}.log"

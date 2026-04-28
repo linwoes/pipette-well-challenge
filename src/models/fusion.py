@@ -130,7 +130,7 @@ class DualViewFusion(nn.Module):
         temporal_layers: int = 2,
         fusion_hidden_dim: int = 512,
         output_dim: int = 256,
-        dropout: float = 0.3,
+        dropout: float = 0.5,
         max_frames: int = 8,
         img_size: int = 224,
     ):

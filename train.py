@@ -777,8 +777,14 @@ def main():
     parser.add_argument('--focal_gamma', type=float, default=0.0, help='Focal loss gamma — focusing parameter (default 0.0 = plain weighted BCE; use 2.0 for focal loss)')
     parser.add_argument('--col_weight', type=float, default=2.0,
                         help='Loss weight for column head (default 2.0 — upweights column discrimination which lags row)')
-    parser.add_argument('--lora_rank', type=int, default=4,
-                        help='LoRA adapter rank (default 4; was 8 — reduced to limit overfitting on 80 samples)')
+    parser.add_argument('--lora_rank', type=int, default=2,
+                        help='LoRA adapter rank (default 2; was 4 — further reduced to limit overfitting)')
+    parser.add_argument('--dropout', type=float, default=0.5,
+                        help='Dropout rate in temporal attention and fusion MLP (default 0.5; was 0.3)')
+    parser.add_argument('--kfold', type=int, default=0,
+                        help='K-fold CV: number of folds (0/1 = disabled, use --val_split)')
+    parser.add_argument('--fold', type=int, default=0,
+                        help='K-fold CV: which fold to hold out as validation (0-indexed)')
     parser.add_argument('--temporal_layers', type=int, default=1,
                         help='Temporal attention layers (default 1; was 2 — reduced to cut trainable params)')
     parser.add_argument('--patience', type=int, default=20,
@@ -825,6 +831,12 @@ def main():
             real_labels, synthetic_labels,
             val_split=args.val_split, seed=args.seed,
         )
+    elif args.kfold > 1:
+        real_sorted = sorted(real_labels, key=lambda r: r['clip_id_FPV'])
+        # Round-robin assignment: clip i → fold (i % kfold), spreads temporal variation evenly
+        val_labels   = [r for i, r in enumerate(real_sorted) if i % args.kfold == args.fold]
+        train_labels = [r for i, r in enumerate(real_sorted) if i % args.kfold != args.fold]
+        logger.info(f"K-fold CV: K={args.kfold}  fold={args.fold}  train={len(train_labels)}  val={len(val_labels)}")
     else:
         rng = np.random.default_rng(args.seed)
         real_sorted = sorted(real_labels, key=lambda r: r['clip_id_FPV'])
@@ -863,6 +875,7 @@ def main():
         lora_rank=args.lora_rank,
         temporal_layers=args.temporal_layers,
         img_size=args.img_size,
+        dropout=args.dropout,
     )
     model = model.to(device)
 
@@ -874,6 +887,7 @@ def main():
         'lora_rank': args.lora_rank,
         'temporal_layers': args.temporal_layers,
         'img_size': args.img_size,
+        'dropout': args.dropout,
     }
 
     # Create trainer
